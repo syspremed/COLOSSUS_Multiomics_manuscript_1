@@ -280,7 +280,7 @@ panel_a <- ggplot(pathway_data, aes(x = neg_log10_FDR, y = Mean_ssGSEA)) +
 
 # Save Panel A
 ## Save figure to PDF.
-ggsave("20251224_GSE204805_vsd_1331_322_399_LMO_organoids_Basale_genes_Metabolanalyst_FDR_ssGSEA_top_pathways_Scatter.pdf", 
+#ggsave("20251224_GSE204805_vsd_1331_322_399_LMO_organoids_Basale_genes_Metabolanalyst_FDR_ssGSEA_top_pathways_Scatter.pdf", 
    # panel_a, width = 12, height = 8, dpi = 300)
 cat("✓ Panel A saved: 20251210_COLOSSUS_Metabolanalyst_FDR_ssGSEA_top_pathways_Scatter.pdf\n")
 
