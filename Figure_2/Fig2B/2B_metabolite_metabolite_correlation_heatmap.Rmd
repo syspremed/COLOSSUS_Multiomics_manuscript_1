@@ -1,0 +1,115 @@
+---
+title: "Figure 2B – Metabolite–Metabolite Correlation Heatmap (COLOSSUS cohort)"
+author: "Sadanandam Lab, Institute of Cancer Research, London"
+date: "March 2026"
+output: html_notebook
+---
+
+<!--
+================================================================================
+  Figure Panel  : 2B
+  Description   : Pairwise Pearson correlation heatmap of batch-corrected known
+                  metabolites (SD > 1 filter) from the COLOSSUS MSS RAS-mutant
+                  CRC cohort. Hierarchical clustering (complete linkage) groups
+                  metabolites into 4 clusters shown as annotation sidebars.
+  Input data    : 20200902_ColossusResults_Metabolomics_2_tissue_weight_Centre_
+                  run_batch_corrected_data.txt
+  Output        : 2B_20260321_COLOSUSS_known_metabolites_sd1.5_metabolite_
+                  correlation_p_values.pdf  (uncomment pdf/dev.off to save)
+  R packages    : corrplot, pheatmap
+  Authors       : Sadanandam Lab, Institute of Cancer Research, London
+  Note          : Update the file path in Chunk 1 to point to your local copy
+                  of the metabolomics data before running.
+================================================================================
+-->
+
+## Step 1 – Load and filter metabolomics data
+
+```{r load-data}
+# Load the batch-corrected metabolomics matrix.
+# Rows = metabolites, columns = patient samples (first column = metabolite name).
+metab <- read.delim(
+  "20200902_ColossusResults_Metabolomics_2_tissue_weight_Centre_run_batch_corrected_data.txt",
+  stringsAsFactors = FALSE
+)
+dim(metab)  # confirm matrix dimensions
+
+# Remove metabolites labelled "Unknown" — these lack HMDB IDs and are excluded
+# from all publication figures.
+unk         <- grep("Unknown", metab[, 1])
+metab_known <- metab[-unk, ]
+dim(metab_known)
+
+# Filter to metabolites with SD > 1 across samples.
+# This retains biologically variable features and reduces noise.
+sd_metab   <- apply(metab_known[, -1], 1, sd)
+w_sd_metab <- which(sd_metab > 1)
+length(w_sd_metab)  # number of retained metabolites
+
+metab_known_sd <- metab_known[w_sd_metab, ]
+dim(metab_known_sd)
+
+# Transpose to samples-in-rows format required for cor().
+metab_known_sd_t <- t(metab_known_sd[, -1])
+colnames(metab_known_sd_t) <- metab_known_sd$Metabolites
+
+# Optional: save filtered matrix for downstream analyses (e.g. Fig 2D).
+# write.table(metab_known_sd,
+#   "results/2B_filtered_metabolites_sd1.txt", row.names = FALSE, sep = "\t")
+```
+
+## Step 2 – Compute Pearson correlations and generate annotated heatmap
+
+```{r correlation-heatmap, fig.width=20, fig.height=15}
+library(corrplot)
+library(pheatmap)
+
+# Compute pairwise Pearson correlation matrix across all retained metabolites.
+corr_mat <- cor(data.matrix(metab_known_sd_t), method = "p")
+
+# Diverging colour palette: red = strong positive, white = zero, navy = negative.
+macolor <- colorRampPalette(c("red", "white", "navyblue"))(100)
+
+# First pheatmap call is used only to extract the hierarchical clustering tree.
+# The tree is cut in the next step to assign cluster membership labels.
+plot_data_pheatmap <- pheatmap(
+  corr_mat,
+  color             = rev(macolor),
+  clustering_method = "complete",  # complete linkage for compact, defined clusters
+  fontsize_row      = 0.8,
+  fontsize_col      = 0.8
+)
+
+# Cut the dendrogram into k = 4 clusters.
+# Four clusters correspond to distinct metabolic pathway groups identified in
+# the COLOSSUS data (amino acids, lipids, TCA intermediates, nucleotides).
+tree_cut <- cutree(plot_data_pheatmap$tree_row, k = 4, h = 20)
+
+# Build annotation data frame for heatmap sidebar labels.
+tc <- data.frame(
+  tip              = names(tree_cut),
+  clust_membership = as.character(unname(tree_cut))
+)
+row.names(tc) <- tc$tip
+tc <- tc["clust_membership"]
+
+head(tc)   # inspect first few cluster assignments
+str(tc)    # confirm data frame structure
+
+# Final annotated heatmap — Figure 2B.
+# Cluster bars appear on both rows and columns for a symmetric display.
+# Uncomment pdf()/dev.off() to save the figure to file.
+
+# pdf("results/2B_20260321_COLOSUSS_known_metabolites_sd1.5_metabolite_correlation_p_values.pdf",
+#     width = 20, height = 15, paper = "a4r")
+pheatmap(
+  corr_mat,
+  color             = rev(macolor),
+  clustering_method = "complete",
+  annotation_row    = tc,   # cluster membership shown as row sidebar
+  annotation_col    = tc,   # same annotation mirrored on columns
+  fontsize_row      = 0.8,
+  fontsize_col      = 0.8
+)
+# dev.off()
+```

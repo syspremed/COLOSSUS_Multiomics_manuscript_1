@@ -1,0 +1,147 @@
+---
+title: "Figures 2K & 2L – Glutamine vs Glutamate: Correlation Scatter and Violin Plots (COLOSSUS)"
+author: "Sadanandam Lab, Institute of Cancer Research, London"
+date: "May 2025"
+output: html_notebook
+---
+
+<!--
+================================================================================
+  Figure Panels : 2K (Pearson correlation scatter), 2L (violin/boxplot)
+  Description   : Quantifies and visualises the relationship between glutamine
+                  and glutamate metabolite levels across COLOSSUS MSS RAS-mutant
+                  patient samples. Panel 2K is a scatter plot with regression
+                  line and Pearson r; panel 2L is a violin + boxplot comparing
+                  the two metabolite distributions.
+  Input data    : 20200902_ColossusResults_Metabolomics_2_tissue_weight_Centre_
+                  run_batch_corrected_data.txt  (same file as Fig 2B)
+  Output        : 2K_..._COLOSSUS_Glutamine_GLutamate_correlation.pdf
+                  2L_..._COLOSSUS_Glutamine_GLutamate_violin_plot.pdf
+                  (uncomment pdf/dev.off lines to save)
+  R packages    : ggplot2, ggpubr, reshape2
+  Authors       : Anguraj Sadanandam
+  Note          : Rows 49 and 51 in metab_known_sd correspond to glutamine and
+                  glutamate respectively — verify row indices if the filtered
+                  matrix changes.
+================================================================================
+-->
+
+## Step 1 – Load and filter metabolomics data
+
+```{r load-data}
+library(ggplot2)
+library(ggpubr)   # for stat_cor()
+library(reshape2) # for melt()
+
+# Load batch-corrected metabolomics data.
+# Same filtering steps as Fig 2B — retain known metabolites with SD > 1.
+metab <- read.delim(
+  "20200902_ColossusResults_Metabolomics_2_tissue_weight_Centre_run_batch_corrected_data.txt",
+  stringsAsFactors = FALSE
+)
+
+# Remove unknown metabolites (no HMDB annotation).
+unk         <- grep("Unknown", metab[, 1])
+metab_known <- metab[-unk, ]
+
+# Filter by SD > 1 to retain variable metabolites.
+sd_metab   <- apply(metab_known[, -1], 1, sd)
+w_sd_metab <- which(sd_metab > 1)
+metab_known_sd <- metab_known[w_sd_metab, ]
+```
+
+## Step 2 – Figure 2K: Glutamine vs Glutamate scatter plot
+
+```{r scatter-plot, fig.width=6, fig.height=5}
+# Extract abundance values for glutamine (row 49) and glutamate (row 51).
+# These row positions are specific to the SD-filtered metabolite matrix.
+# If the input data changes, verify these row indices using:
+#   metab_known_sd[c(49, 51), 1]
+glutamine <- unlist(metab_known_sd[49, -1])
+glutamate <- unlist(metab_known_sd[51, -1])
+
+# Pearson correlation test between the two metabolites.
+cor_result <- cor.test(glutamine, glutamate)
+cat("Pearson r =", round(cor_result$estimate, 3),
+    "  p =", format.pval(cor_result$p.value, digits = 3), "\n")
+
+# Build data frame for plotting.
+df <- data.frame(Glutamine = glutamine, Glutamate = glutamate)
+
+# Scatter plot with linear regression line and Pearson r annotation.
+# Uncomment pdf()/dev.off() to save.
+# pdf("results/2K_20250518_COLOSSUS_Glutamine_GLutamate_correlation.pdf")
+ggplot(df, aes(x = Glutamine, y = Glutamate)) +
+  geom_point(size = 3, color = "#1f77b4", alpha = 0.85) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "solid",
+              color = "#d62728", linewidth = 1) +
+  stat_cor(method = "pearson",
+           aes(label = paste0("italic(r)~\"=\"~", ..r.label..,
+                              "~\",\"~italic(p)~\"=\"~", ..p.label..)),
+           label.x.npc = "left", label.y.npc = "top",
+           size = 5, color = "black", parse = TRUE) +
+  labs(title = "Glutamine vs Glutamate",
+       x     = "Glutamine (a.u.)",
+       y     = "Glutamate (a.u.)") +
+  theme_bw(base_size = 14) +
+  theme(
+    plot.title       = element_text(size = 16, face = "bold", hjust = 0.5),
+    axis.title       = element_text(size = 14),
+    axis.text        = element_text(size = 12),
+    panel.grid.major = element_line(color = "gray90", linewidth = 0.4),
+    panel.grid.minor = element_blank()
+  )
+# dev.off()
+```
+
+## Step 3 – Figure 2L: Violin and boxplot comparison
+
+```{r violin-plot, fig.width=5, fig.height=6}
+# Re-extract glutamine and glutamate (same indices as above).
+glutamine <- unlist(metab_known_sd[49, -1])
+glutamate <- unlist(metab_known_sd[51, -1])
+
+# Build a tidy data frame: one row per sample-metabolite pair.
+df <- data.frame(
+  Sample    = names(glutamine),
+  Glutamine = as.numeric(glutamine),
+  Glutamate = as.numeric(glutamate)
+)
+
+# Reshape to long format for ggplot faceting.
+df_long <- melt(df, id.vars = "Sample",
+                variable.name = "Metabolite", value.name = "Abundance")
+
+# Boxplot with individual data points and Wilcoxon significance label.
+p_box <- ggplot(df_long, aes(x = Metabolite, y = Abundance, fill = Metabolite)) +
+  geom_boxplot(width = 0.5, outlier.shape = 16, outlier.size = 2, alpha = 0.8) +
+  geom_jitter(width = 0.15, alpha = 0.6, size = 2, color = "gray40") +
+  scale_fill_brewer(palette = "Set2") +
+  stat_compare_means(method = "wilcox.test",
+                     label.y = max(df_long$Abundance) * 1.05) +
+  labs(title = "Glutamine and Glutamate levels",
+       x = NULL, y = "Abundance (a.u.)") +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none")
+
+# Violin plot — Figure 2L.
+# Violin shows full distribution shape; inner boxplot shows quartiles.
+p_violin <- ggplot(df_long, aes(x = Metabolite, y = Abundance, fill = Metabolite)) +
+  geom_violin(trim = FALSE, alpha = 0.8) +
+  geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) +
+  geom_jitter(width = 0.15, alpha = 0.6, size = 2, color = "gray40") +
+  scale_fill_brewer(palette = "Set2") +
+  stat_compare_means(method = "wilcox.test",
+                     label.y = max(df_long$Abundance) * 1.05) +
+  labs(title = "Glutamine and Glutamate levels",
+       x = NULL, y = "Abundance (a.u.)") +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none")
+
+print(p_box)
+
+# Save violin plot (Figure 2L).
+# pdf("results/2L_20250518_COLOSSUS_Glutamine_GLutamate_violin_plot.pdf")
+print(p_violin)
+# dev.off()
+```

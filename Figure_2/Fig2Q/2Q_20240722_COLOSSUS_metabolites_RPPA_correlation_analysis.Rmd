@@ -1,0 +1,210 @@
+---
+title: "Figure 2Q – Metabolite–Protein Correlation Analysis (COLOSSUS RPPA)"
+author: "Sadanandam Lab, Institute of Cancer Research, London"
+date: "July 2024"
+output: html_notebook
+---
+
+<!--
+================================================================================
+  Figure Panel  : 2Q  (Fig 2P lollipop is also generated in this script)
+  Description   : All-vs-all Pearson correlation between batch-corrected
+                  metabolomics and RPPA protein expression in matched COLOSSUS
+                  samples. Significant pairs (FDR < 0.2) are identified, and
+                  the top correlated pairs are visualised as a lollipop plot.
+                  A highlighted scatter plot for one specific pair
+                  (Hydrocinnamic acid vs PDK-S241 / FAK) is produced for Fig 2Q.
+  Input data    : Metabolomics: 20200902_ColossusResults_Metabolomics_...txt
+                  RPPA:         20200803_Colossus_RPPA_datasheet_...txt
+  Output        : 2P_..._RPPA_correlation_p_values_plot.pdf  (lollipop)
+                  2Q_..._PDK_S241_scatter_plot.pdf          (highlighted pair)
+  R packages    : ggplot2, ggpubr, reshape2, stringr
+  Authors       : Anguraj Sadanandam
+  Note          : Update both file paths below before running.
+================================================================================
+-->
+
+## Step 1 – Load metabolomics data
+
+```{r load-metabolomics}
+library(ggplot2)
+library(ggpubr)
+library(reshape2)
+library(stringr)
+
+# Load batch-corrected metabolomics matrix (metabolites × samples).
+metab <- read.delim(
+  "20200902_ColossusResults_Metabolomics_2_tissue_weight_Centre_run_batch_corrected_data.txt",
+  stringsAsFactors = FALSE
+)
+dim(metab)
+
+# Remove metabolites without HMDB annotation ("Unknown").
+unk         <- grep("Unknown", metab[, 1])
+metab_known <- metab[-unk, ]
+dim(metab_known)
+
+# Filter to metabolites with SD > 1 (high variability across samples).
+sd_metab   <- apply(metab_known[, -1], 1, sd)
+w_sd_metab <- which(sd_metab > 1)
+metab_known_sd <- metab_known[w_sd_metab, ]
+dim(metab_known_sd)
+```
+
+## Step 2 – Load RPPA protein expression data
+
+```{r load-rppa}
+# Load normalised RPPA data (antibody probes × samples).
+rppa <- read.delim(
+  "20200803_Colossus_RPPA_datasheet_June15_normalized_data_Jochen.txt",
+  stringsAsFactors = FALSE
+)
+dim(rppa)
+```
+
+## Step 3 – Match samples and compute all-vs-all correlations
+
+```{r correlations}
+# Match sample columns between metabolomics and RPPA matrices.
+# Only samples present in both datasets are used.
+m <- match(colnames(metab_known_sd), colnames(rppa))
+w <- which(!is.na(m))
+cat("Matched samples:", length(w), "\n")
+
+# Subset both matrices to matched samples only.
+rppa_1          <- cbind(rppa[, 1],          rppa[, m[w]])
+metab_known_sd_1 <- cbind(metab_known_sd[, 1], metab_known_sd[, w])
+
+# All-vs-all Pearson correlation: every metabolite × every RPPA protein.
+# Results stored in parallel vectors for metabolite name, protein name,
+# correlation coefficient, and raw p-value.
+corr       <- NULL
+p          <- NULL
+metab_names <- NULL
+exp_names  <- NULL
+n <- 1
+
+for (i in 1:nrow(metab_known_sd)) {
+  for (j in 1:nrow(rppa_1)) {
+    test        <- cor.test(as.numeric(metab_known_sd_1[i, -1]),
+                            as.numeric(rppa_1[j, -1]),
+                            method = "pearson")
+    corr[n]        <- test$estimate
+    p[n]           <- test$p.value
+    metab_names[n] <- metab_known_sd_1[i, 1]
+    exp_names[n]   <- rppa_1[j, 1]
+    n <- n + 1
+  }
+}
+
+# Benjamini–Hochberg FDR correction across all tested pairs.
+p.adj_1   <- p.adjust(p, method = "fdr")
+
+# Retain only pairs with FDR < 0.2 (stringent threshold given multiple testing).
+w_p.adj_1   <- which(p.adj_1 < 0.2)
+cat("Significant pairs (FDR < 0.2):", length(w_p.adj_1), "\n")
+
+corr_sig_1   <- corr[w_p.adj_1]
+p_sig_1      <- p[w_p.adj_1]
+p.adj_sig_1  <- p.adj_1[w_p.adj_1]
+metab_names_1 <- metab_names[w_p.adj_1]
+exp_names_1   <- exp_names[w_p.adj_1]
+
+corr_all <- cbind(metab_names_1, exp_names_1, corr_sig_1, p_sig_1, p.adj_sig_1)
+dim(corr_all)
+
+# Optional: save the full significant correlation table.
+# write.table(corr_all,
+#   "results/2P_COLOSUSS_known_metabolites_sd1_RPPA_correlation_p_values.txt",
+#   row.names = FALSE, sep = "\t", quote = FALSE)
+```
+
+## Step 4 – Figure 2P: Lollipop plot of top metabolite–protein pairs
+
+```{r lollipop-plot, fig.width=10, fig.height=8}
+# Convert to data frame and coerce numeric columns.
+plot_df <- as.data.frame(corr_all, stringsAsFactors = FALSE)
+plot_df$corr_sig_1  <- as.numeric(plot_df$corr_sig_1)
+plot_df$p.adj_sig_1 <- as.numeric(plot_df$p.adj_sig_1)
+
+# Keep only positively correlated pairs (relevant for this figure).
+plot_df <- plot_df[!is.na(plot_df$corr_sig_1) &
+                   !is.na(plot_df$p.adj_sig_1) &
+                   plot_df$corr_sig_1 > 0, ]
+
+# Select top 15 pairs ranked by Pearson r (strongest positive first).
+plot_df <- plot_df[order(-plot_df$corr_sig_1), ]
+plot_df <- plot_df[1:min(15, nrow(plot_df)), ]
+
+# Shorten long metabolite names for display; strip mass/RT suffix (_mz_rt).
+name_map <- c(
+  "2-[(2S,4aR,8aS)-2-Hydroxy-4a-methyl-8-methylenedecahydro-2-naphthalenyl]acrylic acid_250.16_1.66" = "HMMNA"
+)
+plot_df$metab_clean <- ifelse(
+  plot_df$metab_names_1 %in% names(name_map),
+  name_map[plot_df$metab_names_1],
+  sub("_[0-9.]+_[0-9.]+$", "", plot_df$metab_names_1)
+)
+
+# Create combined metabolite / protein pair label, wrapped for readability.
+plot_df$pair_label <- str_wrap(
+  paste(plot_df$metab_clean, "/", plot_df$exp_names_1),
+  width = 40
+)
+
+# Sort ascending so lowest correlation is at the bottom of the y-axis.
+plot_df <- plot_df[order(plot_df$corr_sig_1), ]
+plot_df$pair_id <- seq_len(nrow(plot_df))
+
+# Lollipop plot: x = Pearson r, y = metabolite/protein pair.
+# Dot colour encodes –log10(FDR) — darker = more significant.
+p_lollipop <- ggplot(plot_df, aes(x = corr_sig_1, y = pair_id)) +
+  geom_segment(aes(x = 0, xend = corr_sig_1, yend = pair_id),
+               linewidth = 0.4, colour = "black") +
+  geom_point(aes(fill = -log10(pmax(p.adj_sig_1, 1e-300))),
+             shape = 21, size = 4, colour = "black", stroke = 0.6) +
+  scale_y_continuous(breaks = plot_df$pair_id, labels = plot_df$pair_label) +
+  scale_fill_viridis_c(name = "-log10(adj p-value)", direction = 1) +
+  labs(x = "Pearson correlation coefficient", y = NULL) +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major.y = element_blank(),
+        panel.grid.minor   = element_blank(),
+        axis.text.y        = element_text(size = 12),
+        axis.text.x        = element_text(size = 12),
+        plot.margin        = margin(t = 10, r = 40, b = 10, l = 10))
+
+# Save to PDF (Figure 2P).
+ggsave(
+  "results/2P_20260427_COLOSUSS_known_metabolites_sd1_RPPA_correlation_p_values_plot.pdf",
+  plot  = p_lollipop,
+  width = 10, height = 8, units = "in", device = cairo_pdf
+)
+print(p_lollipop)
+```
+
+## Step 5 – Figure 2Q: Highlighted scatter for one specific pair
+
+```{r scatter-highlighted, fig.width=5, fig.height=5}
+# Spot-check: verify the row index for the metabolite of interest.
+# Example: Hydrocinnamic acid (row 181 in metab_known after SD filter).
+grep("Heptadecanoic acid", metab_known[, 1])  # confirm index
+
+# Extract the specific metabolite and RPPA protein of interest.
+# Row 181 = selected metabolite; row 24 = PDK-S241 in rppa_1.
+df_scatter <- data.frame(
+  Metabolite = as.numeric(metab_known[181, w]),
+  FAKp       = as.numeric(rppa_1[24, -1])
+)
+colnames(df_scatter) <- c("Metabolite", "PDK_S241")
+
+# Scatter plot with linear regression and Pearson r annotation — Figure 2Q.
+# Uncomment pdf()/dev.off() to save.
+# pdf("results/2Q_20240723_COLOSSUS_Hydrocinnamic_acid_PDK_S241_scatter_plot.pdf")
+ggplot(df_scatter, aes(x = Metabolite, y = PDK_S241)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  stat_cor(method = "pearson") +
+  labs(x = "Hydrocinnamic acid (a.u.)", y = "PDK-S241 (RPPA normalised)") +
+  theme_bw(base_size = 14)
+# dev.off()
+```
