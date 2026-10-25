@@ -1,0 +1,84 @@
+---
+title: "Figures 3H & 3I – MYC CpG Enhancer Methylation Correlations (TCGA COAD RAS-mutant)"
+author: "Sadanandam Lab, Institute of Cancer Research, London"
+date: "November 2025"
+output: html_notebook
+---
+
+<!--
+================================================================================
+  Figure Panels : 3H, 3I
+  Description   : 3H — Scatter plot of the top CpG probes most highly
+                       correlated with MYC gene expression across TCGA COAD
+                       RAS-mutant tumours. Shows Pearson r per probe vs MYC TSS
+                       distance (lollipop/scatter format).
+                  3I — Detailed probe–gene pair table: MYC and MYC target genes
+                       correlated with the same hypomethylated enhancer probes.
+  Input data    : TCGA methylation beta-values (MYC-correlated probes)
+                  TCGA MYC RNA-seq expression
+                  tcga_coadread_pancanatlas_RAS_mutant_MSS_TCGA_barcodes.txt
+  Output        : 3H_..._MYC_methylation_correlated_probes.pdf  (scatter)
+                  3I_..._MYC_target_probe_gene_pairs.pdf        (pair table)
+  R packages    : ggplot2, ggpubr, dplyr, reshape2
+  Authors       : Sadanandam Lab, Institute of Cancer Research, London
+  Contact       : anguraj.sadanandam@icr.ac.uk
+  Note          : Update TCGA data file paths in Chunk 1 before running.
+================================================================================
+-->
+
+<!--
+================================================================================
+  Figure Panel  : 3H
+  Description   : Scatter/heatmap of the CpG probes most highly correlated
+                  with MYC gene expression in TCGA COAD RAS-mutant tumours.
+                  Mirror analysis to Fig 3D (PTK2).
+  Input data    : TCGA methylation beta-values (MYC-correlated probes)
+                  TCGA MYC RNA-seq expression
+                  tcga_coadread_pancanatlas_RAS_mutant_MSS_TCGA_barcodes.txt
+  Output        : 3H_..._MYC_methylation_correlated_probes.pdf
+  R packages    : ggplot2, ggpubr, dplyr, reshape2
+  Authors       : Sadanandam Lab, Institute of Cancer Research, London
+  Contact       : anguraj.sadanandam@icr.ac.uk
+  Note          : Update file paths in Chunk 1 before running.
+================================================================================
+-->
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# read MYC methylation data
+data <- read.table("20251118_TCGA_MYC_methylation_5_highly_correlated.txt", header = TRUE, stringsAsFactors = FALSE)
+dim(data)
+
+# Load libraries
+library(ggplot2)
+#  scale_color_gradient2(low = "red", mid = "white", high = "blue", midpoint = mean(data$Corr)) +
+
+# Plot with color gradient based on correlation
+#pdf("20251118_TCGA_MYC_methylation_5_highly_correlated_plot.pdf")
+ggplot(data, aes(x = Distance, y = Correlation, label = Probe, color = "blue")) +
+  geom_point(size = 4) +
+  geom_segment(data = data,
+                 aes(x = Distance, xend = Distance, y = 0, yend = Correlation),
+                 color = "gray30")+
+  geom_text(vjust = -1, size = 3) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) + 
+  theme_minimal() +
+  labs(
+    title = "Correlation vs Distance Colored by Corr Value",
+    x = "Distance",
+    y = "Correlation",
+    color = "Corr"
+  ) +
+  theme(plot.title = element_text(hjust = 0.5))
+#dev.off()
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

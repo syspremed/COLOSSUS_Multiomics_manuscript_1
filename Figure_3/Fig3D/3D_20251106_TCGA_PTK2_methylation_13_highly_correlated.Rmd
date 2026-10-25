@@ -1,0 +1,59 @@
+---
+title: "Figure 3D – PTK2 Methylation: Top 13 Correlated CpG Probes (TCGA COAD)"
+author: "Sadanandam Lab, Institute of Cancer Research, London"
+date: "November 2025"
+output: html_notebook
+---
+
+<!--
+================================================================================
+  Figure Panel  : 3D
+  Description   : Scatter/heatmap visualisation of the 13 CpG probes most
+                  highly correlated with PTK2 (FAK) gene expression in TCGA
+                  COAD RAS-mutant tumours. Methylation beta-values vs RNA-seq
+                  expression are plotted per probe with Pearson r annotation.
+  Input data    : TCGA methylation beta-values (selected probes)
+                  TCGA PTK2 RNA-seq expression
+                  tcga_coadread_pancanatlas_RAS_mutant_MSS_TCGA_barcodes.txt
+  Output        : 3D_..._PTK2_methylation_correlated_probes.pdf
+  R packages    : ggplot2, ggpubr, dplyr, reshape2
+  Authors       : Sadanandam Lab, Institute of Cancer Research, London
+  Contact       : anguraj.sadanandam@icr.ac.uk
+  Note          : Update file paths in Chunk 1 before running.
+================================================================================
+-->
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# read PTK2 methylation data
+data <- read.table("20251106_TCGA_PTK2_methylation_13_highly_correlated.txt", header = TRUE, stringsAsFactors = FALSE)
+dim(data)
+
+# Load libraries
+library(ggplot2)
+#  scale_color_gradient2(low = "red", mid = "white", high = "blue", midpoint = mean(data$Corr)) +
+
+# Plot with color gradient based on correlation
+#pdf("20251106_TCGA_PTK2_methylation_13_highly_correlated_plot.pdf")
+ggplot(data, aes(x = Distance, y = Correlation, label = Probe, color = "blue")) +
+  geom_point(size = 4) +
+  geom_segment(data = data,
+                 aes(x = Distance, xend = Distance, y = 0, yend = Correlation),
+                 color = "gray30")+
+  geom_text(vjust = -1, size = 3) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) + 
+  theme_minimal() +
+  labs(
+    title = "Correlation vs Distance Colored by Corr Value",
+    x = "Distance",
+    y = "Correlation",
+    color = "Corr"
+  ) +
+  theme(plot.title = element_text(hjust = 0.5))
+#dev.off()
+```
+
+
