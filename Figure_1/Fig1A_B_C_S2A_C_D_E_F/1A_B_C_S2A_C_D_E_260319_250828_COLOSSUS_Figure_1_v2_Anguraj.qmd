@@ -1,0 +1,483 @@
+---
+title: "Figure 1A-C and Supplementary Figure S2A, S2C-E – Mutation landscape of COLOSSUS and TCGA MSS CRC"
+author: "Adrian Larkeryd; Sadanandam Lab, Institute of Cancer Research, London"
+date: "March 2026"
+format: 
+  html:
+    page-layout: full
+    embed-resources: true
+    toc: true
+    toc-depth: 5
+    toc-expand: 5
+  pdf:
+    toc: true
+    toc-depth: 5
+fig-width: 6
+fig-height: 4
+fig-caption: true
+cache: true
+editor: source
+prefer-html: true
+---
+
+<!--
+================================================================================
+  Figure Panel  : 1A, 1B, 1C; Supp S2A, S2C, S2D, S2E
+  Description   : Somatic mutation landscape of COLOSSUS (WES) and TCGA MSS cohorts.
+                  1A COLOSSUS St2/3 MSS RAS-mt oncoplot (top 20 CGC driver genes); 1B TCGA MSS
+                  RAS-mt oncoplot; 1C TCGA MSS RAS-mt pathway oncoplot; S2A/S2C variant
+                  classifications (COLOSSUS / TCGA); S2D TCGA MSS RAS-wt oncoplot; S2E mutation
+                  frequency comparison, TCGA RAS-mt vs RAS-wt.
+  Input data    : COLOSSUS_WES_allsamples.maf
+                  cbioportal_data_clinical_sample.tsv
+                  cbioportal_mutations.maf
+                  250828_Fig1BC_TCGAmafobjects.Rdata
+                  250828_Fig1BC_COLOSSUSmafobject.Rdata
+                  COLOSUSS_IDs_Matched.xlsx
+                  Fig1BC_CGC_20220314.tsv
+  Output        : 1B_COLOSSUS_Oncoplot_top20_genes_from_TCGA.pdf
+                  1C_TCGA_oncoplot_top20_gene_mutations_RAS_mutant.pdf
+                  S1D_TCGA_oncoplot_top20_gene_mutations_RAS_wildtype.pdf
+                  1D_TCGA_oncoplot_gene_mutations_RAS_mutant_pathways.pdf
+                  20260105_TCGA_RAS_mut_left_RAS_wt_right_cobarplot.pdf
+                  20260105_TCGA_RAS_mut_left_side.pdf
+                  20260105_TCGA_RAS_wildtype_right_side.pdf
+                  20260105_TCGA_RAS_wildtype_cobarplot_legend.pdf
+                  S1E_supp_cobarplot_right.pdf
+                  S1E_supp_cobarplot_left.pdf
+                  S1E_supp_cobarplot_legend.pdf
+                  20260105_COLOSSUS_variant_#plot.pdf
+                  20260105_TCGA_variant_plot#.pdf
+  R packages    : tidyverse, maftools, wesanderson, dplyr, ggplot2, cowplot, grid, ComplexHeatmap, ggbeeswarm, survival, survminer, BiocGenerics, enrichR, Seurat, RColorBrewer, readxl
+  Authors       : Sadanandam Lab, Institute of Cancer Research, London
+  Contact       : anguraj.sadanandam@icr.ac.uk
+  Note          : Original analysis by Adrian Larkeryd. Some output file names in the code keep draft (pre-publication) panel labels.
+================================================================================
+-->
+
+# Library
+
+```{r library}
+
+library(tidyverse)
+library(maftools)
+library(wesanderson)
+library(dplyr)
+library(ggplot2)
+library(cowplot)
+library(grid)
+library(ComplexHeatmap)
+library(ggbeeswarm)
+library(survival)
+library(survminer)
+library(BiocGenerics)
+library(enrichR)
+library(Seurat)
+
+```
+
+# Colours
+
+```{r colours}
+
+colour_mutation_type = c("Missense_Mutation" = "#80b1d3", 
+                         "Nonsense_Mutation" = "#ffffb3", 
+                         "In_Frame_Del" = "#bebada", 
+                         "In_Frame_Ins" = "#fb8072", 
+                         "Frame_Shift_Del" = "#8dd3c7", 
+                         "Frame_Shift_Ins" = "#fdb462", 
+                         "Splice_Site" = "#b3de69", 
+                         "Multi_Hit" = "#fccde5")
+
+vc_cols = RColorBrewer::brewer.pal(n = 8, name = 'Paired')
+names(vc_cols) = c(
+  'Frame_Shift_Del',
+  'Missense_Mutation',
+  'Nonsense_Mutation',
+  'Multi_Hit',
+  'Frame_Shift_Ins',
+  'In_Frame_Ins',
+  'Splice_Site',
+  'In_Frame_Del'
+)
+
+vc_cols_v2 = c("Frame_Shift_Del" = "#A6CEE3", 
+               "Missense_Mutation" = "#1F78B4", 
+               "Nonsense_Mutation" = "#B2DF8A", 
+               "Multi_Hit" = "#333333", 
+               "Frame_Shift_Ins" = "#E31A1C", 
+               "In_Frame_Ins" = "#FB9A99", 
+               "Splice_Site" = "#FDBF6F", 
+               "In_Frame_Del" = "#FF7F00") 
+
+colour_wes_darjeeling1_n5 = wes_palette("Darjeeling1", 5, type = "discrete")
+colour_wes_chevalier1_2 = wes_palette("Chevalier1", 2)
+colour_wes_asteroidcity1_5 = wes_palette("AsteroidCity1")
+colour_dataset_cat = c("COLOSSUS" = colour_wes_asteroidcity1_5[1], "TCGA MSS RAS" = colour_wes_asteroidcity1_5[2], "TCGA MSS RAS-WT" = colour_wes_asteroidcity1_5[4])
+
+kras_colours = c("A146T" = "#228833", 
+                 "G12A" = "#CCBB44", 
+                 "G12D" = "#EE6677", 
+                 "G12V" = "#AA3377", 
+                 "G12C" = "#4477AA", 
+                 "G13D" = "#66CCEE", 
+                 "Other" = "#BBBBBB")
+
+colour_cna_type = c("AMP" = "#F2AD00", "DEL" = "#00A08A")
+colour_cna_type_transparent = c("AMP" = "#F2AD0066", "DEL" = "#00A08A66")
+
+publication_theme = theme(
+  title = element_text(size = 20),
+  axis.title.x = element_text(size = 16),
+  axis.text.x = element_text(size = 14),
+  axis.title.y = element_text(size = 16),
+  axis.text.y = element_text(size = 14)
+)
+
+```
+
+```{r COLOSSUS-data-prep}
+
+ colossus_maf = read.maf(
+   maf = "COLOSSUS_WES_allsamples.maf")
+ colossus_maf@summary
+ 
+ colossus_tmp_maf_RAS = subsetMaf(maf = colossus_maf, genes = c("KRAS", "NRAS")) 
+ 
+ colossus_RAS_samples = as.character(colossus_tmp_maf_RAS@variants.per.sample$Tumor_Sample_Barcode)
+
+ colossus_maf_RAS = subsetMaf(maf = colossus_maf, tsb = colossus_RAS_samples)
+
+ head(colossus_maf_RAS@variants.per.sample)
+ 
+ colossus_RAS_samples_rmhypermutators = colossus_maf_RAS@variants.per.sample$Tumor_Sample_Barcode[2:nrow(colossus_maf_RAS@variants.per.sample)]
+
+```
+
+```{r TCGA-data-prep}
+# From cBioportal using the project Colorectal Adenocarcinoma TCGA PanCancer data
+cbioportal_clinical = read_tsv("cbioportal_data_clinical_sample.tsv")
+cbioportal_maf = read.maf("cbioportal_mutations.maf")
+
+# Subset clinical data to only include patients with mutation data
+cbioportal_clinical = cbioportal_clinical[cbioportal_clinical$SAMPLE_ID %in% cbioportal_maf@variants.per.sample$Tumor_Sample_Barcode, ]
+
+# Check if any patients have two or more samples. Should be TRUE if all unique.
+# all(!duplicated(substr(cbioportal_maf@variants.per.sample$Tumor_Sample_Barcode, 1,12)))
+
+# Splitting samples by MSIsensor score of 20. Score<20 is MSS. Score>=20 is MSI.  
+tcga_mss_samples = cbioportal_clinical$SAMPLE_ID[cbioportal_clinical$MSI_SENSOR_SCORE<20]
+tcga_msi_samples = cbioportal_clinical$SAMPLE_ID[cbioportal_clinical$MSI_SENSOR_SCORE>=20]
+
+# Creating a subset of clinical data for mss only
+cbioportal_clinical_mss = cbioportal_clinical[cbioportal_clinical$MSI_SENSOR_SCORE<20,]
+
+# Subsetting MSS samples by removing hypermutator samples
+# hypermutator threshold from https://doi.org/10.1016/j.cell.2017.09.048
+tcga_mss_rmh_samples = cbioportal_clinical_mss$SAMPLE_ID[cbioportal_clinical_mss$TMB_NONSYNONYMOUS<10]
+
+# Create maf files
+cbioportal_maf_msi = subsetMaf(cbioportal_maf, tsb=tcga_msi_samples)
+cbioportal_maf_mss = subsetMaf(cbioportal_maf, tsb=tcga_mss_samples)
+cbioportal_maf_mss_rmh = subsetMaf(cbioportal_maf, tsb=tcga_mss_rmh_samples)
+
+# Find RAS mutant samples
+tmpmaf = subsetMaf(cbioportal_maf_mss_rmh, genes = c("NRAS", "KRAS"))
+cbioportal_maf_mss_rmh_ras = subsetMaf(cbioportal_maf_mss_rmh, tsb = tmpmaf@variants.per.sample$Tumor_Sample_Barcode)
+# oncoplot(cbioportal_maf_mss_rmh_ras, genes = c("TP53", "KRAS", "NRAS"), removeNonMutated = F)
+tcga_mss_rmh_ras_samples = cbioportal_maf_mss_rmh_ras@variants.per.sample$Tumor_Sample_Barcode
+length(tcga_mss_rmh_ras_samples)
+
+# Find RAS-WT samples
+cbioportal_maf_mss_rmh_raswt = filterMaf(cbioportal_maf_mss_rmh, tsb = tcga_mss_rmh_ras_samples)
+# oncoplot(cbioportal_maf_mss_rmh_raswt, genes = c("TP53", "KRAS", "NRAS"), removeNonMutated = F)
+tcga_mss_rmh_raswt_samples = cbioportal_maf_mss_rmh_raswt@variants.per.sample$Tumor_Sample_Barcode
+length(tcga_mss_rmh_raswt_samples)
+
+# Save Rdata file
+# save(cbioportal_maf_mss_rmh, cbioportal_maf_mss_rmh_raswt, cbioportal_maf_mss_rmh_ras, cbioportal_maf_msi, 
+#      file = "../data/250828_Fig1BC_TCGAmafobjects.Rdata")
+
+#write.table(cbioportal_maf_mss_rmh_raswt@variants.per.sample$Tumor_Sample_Barcode, 
+ #           file = "../results/Fig1BC_cbioportal_TCGA_MSS_rmhyper_RASWT.txt", #col.names = F, row.names = F, quote = F)
+#write.table(cbioportal_maf_mss_rmh_ras@variants.per.sample$Tumor_Sample_Barcode, 
+ #           file = "../results/Fig1BC_cbioportal_TCGA_MSS_rmhyper_RAS.txt", col.names = F, row.names = F, quote = F)
+#write.table(cbioportal_maf_msi@variants.per.sample$Tumor_Sample_Barcode, 
+  #          file = "../results/supp_cbioportal_TCGA_MSI.txt", col.names = F, #row.names = F, quote = F)
+
+```
+
+
+```{r fig1bc-prep}
+
+load("250828_Fig1BC_TCGAmafobjects.Rdata")
+load("250828_Fig1BC_COLOSSUSmafobject.Rdata")
+
+COLOSSUS_sample_names = as.data.frame(readxl::read_xlsx("COLOSUSS_IDs_Matched.xlsx"))
+names(COLOSSUS_sample_names) = c("COLOSSUS_ID", "RCSI_ID")
+
+COLOSSUS_sample_names = COLOSSUS_sample_names[!is.na(COLOSSUS_sample_names$COLOSSUS_ID) &
+                                                !is.na(COLOSSUS_sample_names$RCSI_ID),]
+
+cgc = read.table("Fig1BC_CGC_20220314.tsv",
+                 sep = "\t",
+                 header = T)
+
+top_genes_from_tcga = cbioportal_maf_mss_rmh@gene.summary[["Hugo_Symbol"]][cbioportal_maf_mss_rmh@gene.summary[["Hugo_Symbol"]] %in% cgc$Gene.Symbol][1:20]
+
+top_genes_from_tcga_sorted_by_colossus = colossus_maf_RAS_rmh@gene.summary$Hugo_Symbol[which(colossus_maf_RAS_rmh@gene.summary$Hugo_Symbol %in% top_genes_from_tcga)]
+
+mutation_type_order = c("Missense_Mutation", "Nonsense_Mutation", "In_Frame_Del", "In_Frame_Ins", "Frame_Shift_Del", "Frame_Shift_Ins", "Splice_Site", "Multi_Hit")
+
+```
+
+# Fig 1A
+
+```{r fig1A}
+#| fig-width: 3.5
+#| fig-height: 5
+
+#pdf(file = "1B_COLOSSUS_Oncoplot_top20_genes_from_TCGA.pdf", height = 5, width = 3.5)
+oncoplot(maf = colossus_maf_RAS_rmh, genes = top_genes_from_tcga_sorted_by_colossus, removeNonMutated = F, keepGeneOrder = T, colors = vc_cols_v2)
+#dev.off()
+
+```
+
+
+# Fig 1B
+
+```{r fig1B}
+#| fig-width: 5.5
+#| fig-height: 5
+
+#pdf(file = "1C_TCGA_oncoplot_top20_gene_mutations_RAS_mutant.pdf", height = 5, width = 5.5)
+oncoplot(maf = cbioportal_maf_mss_rmh_ras, genes = top_genes_from_tcga_sorted_by_colossus, removeNonMutated = F, keepGeneOrder = T, colors = vc_cols_v2)
+#dev.off()
+
+```
+
+# Supplementary figure TCGA RAS-WT
+
+```{r supp-tcga-raswt}
+#| fig-width: 7
+#| fig-height: 5
+
+#pdf(file = "S1D_TCGA_oncoplot_top20_gene_mutations_RAS_wildtype.pdf", height = 5, width = 7)
+oncoplot(maf = cbioportal_maf_mss_rmh_raswt, genes = top_genes_from_tcga_sorted_by_colossus, removeNonMutated = F, keepGeneOrder = T, colors = vc_cols_v2)
+#dev.off()
+
+```
+
+# Fig 1C
+
+```{r fig1C}
+#| fig-width: 5
+#| fig-height: 5
+
+tmp_pws = pathways(maf = cbioportal_maf_mss_rmh_ras)
+
+#pdf(file = "1D_TCGA_oncoplot_gene_mutations_RAS_mutant_pathways.pdf", height = 5, width = 5)
+plotPathways(cbioportal_maf_mss_rmh_ras, pathlist = tmp_pws)
+#dev.off()
+
+```
+
+
+
+# Supplementary figure Cobarplot
+
+```{r supp-fig1C}
+#| fig-width: 6
+#| fig-height: 4
+
+gene_order = rev(top_genes_from_tcga_sorted_by_colossus)
+
+tmp_cohort_cobarplot=coBarplot(m1=cbioportal_maf_mss_rmh_ras, m2=cbioportal_maf_mss_rmh_raswt, m1Name = "TCGA MSS RAS", m2Name = "TCGA MSS RAS-WT", genes = gene_order, colors=vc_cols_v2)
+
+
+sorted_gene_order = names(sort(abs(colSums(tmp_cohort_cobarplot$m1)-colSums(tmp_cohort_cobarplot$m2)), decreasing = T))[1:15]
+
+#pdf("20260105_TCGA_RAS_mut_left_RAS_wt_right_cobarplot.pdf")
+cohort_cobarplot=coBarplot(m1=cbioportal_maf_mss_rmh_ras, m2=cbioportal_maf_mss_rmh_raswt, m1Name = "TCGA MSS RAS", m2Name = "TCGA MSS RAS-WT", genes = sorted_gene_order, colors=vc_cols_v2)
+annotation_layer_m1 = round(colSums(cohort_cobarplot$m1),1)
+#dev.off()
+
+
+
+m1_df = as.data.frame(cohort_cobarplot$m1)
+m1_df$Mutation_type = rownames(m1_df)
+m1_df = pivot_longer(m1_df, cols=1:(ncol(m1_df)-1))
+names(m1_df) = c("Mutation_type", "Gene", "Percentage")
+m1_df[m1_df==0] = NA
+m1_df$Gene = factor(m1_df$Gene, levels = sorted_gene_order)
+m1_df$Mutation_type = factor(m1_df$Mutation_type, levels =
+c("Missense_Mutation", "Nonsense_Mutation", "In_Frame_Del", "In_Frame_Ins", "Frame_Shift_Del", "Frame_Shift_Ins", "Splice_Site", "Multi_Hit"))
+
+#pdf("20260105_TCGA_RAS_mut_left_side.pdf")
+cobarplot_leftside = ggplot(data = m1_df, aes(x = Percentage, y = Gene, fill=Mutation_type)) +
+  geom_bar(stat = "identity", position = "stack", colour="black", show.legend = F) +
+  annotate("text", y=names(annotation_layer_m1), x=annotation_layer_m1+5, label=paste0(annotation_layer_m1,"%"), size=4)+
+  labs(title= "", x = "Percentage of cases", y = "") +
+  scale_fill_manual(values=vc_cols_v2)+
+  scale_x_reverse(limits=c(100,0))+
+  theme_bw()+publication_theme+
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()
+        )
+cobarplot_leftside
+#dev.off()
+
+annotation_layer_m2 = round(colSums(cohort_cobarplot$m2),1)
+
+m2_df = as.data.frame(cohort_cobarplot$m2)
+m2_df$Mutation_type = rownames(m2_df)
+m2_df = pivot_longer(m2_df, cols=1:(ncol(m2_df)-1))
+names(m2_df) = c("Mutation_type", "Gene", "Percentage")
+m2_df[m2_df==0] = NA
+m2_df$Gene = factor(m2_df$Gene, levels = sorted_gene_order)
+m2_df$Mutation_type = factor(m2_df$Mutation_type, levels = mutation_type_order)
+
+#pdf("20260105_TCGA_RAS_wildtype_right_side.pdf")
+cobarplot_rightside = ggplot(data = m2_df, aes(x = Percentage, y = Gene, fill=Mutation_type)) +
+  geom_bar(stat = "identity", position = "stack", colour="black", show.legend = F) +
+  annotate("text", y=names(annotation_layer_m2), x=annotation_layer_m2+5, label=paste0(annotation_layer_m2,"%"), size=4)+
+  labs(title= "", x = "Percentage of cases", y = "") +
+  scale_fill_manual(values=vc_cols_v2)+
+  scale_x_continuous(limits=c(0,100))+
+  theme_bw()+publication_theme+
+  theme(axis.text.y=element_blank(),  #remove y axis labels
+        axis.ticks.y=element_blank(),  #remove y axis ticks
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()
+  )
+cobarplot_rightside
+#dev.off()
+
+#pdf("20260105_TCGA_RAS_wildtype_cobarplot_legend.pdf")
+cobarplot_rightside_LEGEND = ggplot(data = m2_df, aes(x = Percentage, y = Gene, fill=Mutation_type)) +
+  geom_bar(stat = "identity", position = "stack", colour="black", show.legend = T) +
+  annotate("text", y=names(annotation_layer_m2), x=annotation_layer_m2+5, label=paste0(annotation_layer_m2,"%"), size=4)+
+  labs(title= "", x = "Percentage of cases", y = "") +
+  scale_fill_manual(values=vc_cols_v2)+
+  scale_x_continuous(limits=c(0,100))+
+  theme_bw()+publication_theme+
+  theme(axis.text.y=element_blank(),  #remove y axis labels
+        axis.ticks.y=element_blank(),  #remove y axis ticks
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()
+  )
+legend = cowplot::get_legend(cobarplot_rightside_LEGEND)
+#dev.off()
+
+#ggsave(filename = "S1E_supp_cobarplot_right.pdf", plot = cobarplot_rightside, width = 6, height = 4)
+#ggsave(filename = "S1E_supp_cobarplot_left.pdf", plot = cobarplot_leftside, width = 6, height = 4)
+
+#pdf(file = "S1E_supp_cobarplot_legend.pdf", height = 5, width = 5)
+grid.newpage()
+grid.draw(legend)
+#dev.off()
+```
+
+
+# Supplementary figure Variant classification
+
+```{r supp-fig1AB}
+#| fig-width: 6
+#| fig-height: 5
+
+colossus_variantclassification = sort(colSums(colossus_maf_RAS_rmh@variant.classification.summary[,2:ncol(colossus_maf_RAS_rmh@variant.classification.summary)]), decreasing = T)
+tcga_ras_variantclassification = sort(colSums(cbioportal_maf_mss_rmh_ras@variant.classification.summary[,2:ncol(cbioportal_maf_mss_rmh_ras@variant.classification.summary)]), decreasing = T)
+tcga_raswt_variantclassification = sort(colSums(cbioportal_maf_mss_rmh_raswt@variant.classification.summary[,2:ncol(cbioportal_maf_mss_rmh_raswt@variant.classification.summary)]), decreasing = T)
+
+colossus_variantclassification = as.data.frame(cbind(names(colossus_variantclassification), colossus_variantclassification, rep("COLOSSUS", length(colossus_variantclassification))))
+tcga_ras_variantclassification = as.data.frame(cbind(names(tcga_ras_variantclassification), tcga_ras_variantclassification, rep("TCGA MSS RAS", length(tcga_ras_variantclassification))))
+tcga_raswt_variantclassification = as.data.frame(cbind(names(tcga_raswt_variantclassification), tcga_raswt_variantclassification, rep("TCGA MSS RAS-WT", length(tcga_raswt_variantclassification))))
+
+names(colossus_variantclassification) = c("Variant_classification", "Number_of_variants", "Cohort")
+names(tcga_ras_variantclassification) = c("Variant_classification", "Number_of_variants", "Cohort")
+names(tcga_raswt_variantclassification) = c("Variant_classification", "Number_of_variants", "Cohort")
+
+variantclassification_ggplotdata = bind_rows(colossus_variantclassification, tcga_ras_variantclassification,tcga_raswt_variantclassification)
+
+variantclassification_ggplotdata$Number_of_variants = as.numeric(variantclassification_ggplotdata$Number_of_variants)
+
+variantclassification_ggplotdata$Variant_classification[variantclassification_ggplotdata$Variant_classification=="total"] = "Total"
+variantclassification_ggplotdata$Variant_classification[variantclassification_ggplotdata$Variant_classification=="Missense_Mutation"] = "Missense"
+variantclassification_ggplotdata$Variant_classification[variantclassification_ggplotdata$Variant_classification=="Nonsense_Mutation"] = "Nonsense"
+variantclassification_ggplotdata$Variant_classification[variantclassification_ggplotdata$Variant_classification=="Nonstop_Mutation"] = "Nonstop"
+variantclassification_ggplotdata$Variant_classification[variantclassification_ggplotdata$Variant_classification=="Frame_Shift_Del"] = "FS del"
+variantclassification_ggplotdata$Variant_classification[variantclassification_ggplotdata$Variant_classification=="Frame_Shift_Ins"] = "FS ins"
+variantclassification_ggplotdata$Variant_classification[variantclassification_ggplotdata$Variant_classification=="In_Frame_Del"] = "In frame del"
+variantclassification_ggplotdata$Variant_classification[variantclassification_ggplotdata$Variant_classification=="In_Frame_Ins"] = "In frame ins"
+variantclassification_ggplotdata$Variant_classification[variantclassification_ggplotdata$Variant_classification=="Splice_Site"] = "Splice site"
+variantclassification_ggplotdata$Variant_classification[variantclassification_ggplotdata$Variant_classification=="Translation_Start_Site"] = "Transl. start"
+
+variantclassification_ggplotdata$Variant_classification = factor(variantclassification_ggplotdata$Variant_classification, levels=rev(c("Total", "Missense", "Nonsense", "FS del", "FS ins", "In frame del", "In frame ins", "Splice site", "Transl. start", "Nonstop")))
+
+variantclassification_ggplotdata_p1 = variantclassification_ggplotdata[variantclassification_ggplotdata$Variant_classification %in% c("Total", "Missense"),]
+variantclassification_ggplotdata_p2 = variantclassification_ggplotdata[!variantclassification_ggplotdata$Variant_classification %in% c("Total", "Missense"),]
+
+
+publication_theme_variant_classification = theme(
+  title = element_text(size = 20),
+  axis.title.x = element_text(size = 14),
+  axis.text.x = element_text(size = 12),
+  axis.title.y = element_text(size = 14),
+  axis.text.y = element_text(size = 12)
+)
+
+variantclassification_top = ggplot(data=variantclassification_ggplotdata_p1, aes(x=Number_of_variants, y=Variant_classification, fill=Cohort))+
+  geom_bar(position = "dodge", stat = "identity", orientation = "y", show.legend = F, col="#000000")+
+  theme_bw()+
+  scale_fill_manual(values=colour_dataset_cat)+
+  publication_theme_variant_classification+
+  labs(title="")+xlab("")+ylab("")
+
+variantclassification_bottom = ggplot(data=variantclassification_ggplotdata_p2, aes(x=Number_of_variants, y=Variant_classification, fill=Cohort))+
+  geom_bar(position = "dodge", stat = "identity", orientation = "y", show.legend = T, col="#000000")+
+  theme_bw()+
+  scale_fill_manual(values=colour_dataset_cat)+
+  publication_theme_variant_classification+
+  xlab("Number of variants")+ylab("Variant classification")
+
+variant_classification_plot = plot_grid(variantclassification_top, variantclassification_bottom, ncol = 1, rel_heights = c(1,2), align = "hv", scale = 1)
+
+variantclassification_top_splitcol = ggplot(data=variantclassification_ggplotdata_p1[variantclassification_ggplotdata_p1$Cohort=="COLOSSUS",], aes(x=Number_of_variants, y=Variant_classification, fill=Cohort))+
+  geom_bar(position = "dodge", stat = "identity", orientation = "y", show.legend = F, col="#000000")+
+  theme_bw()+
+  scale_fill_manual(values=colour_dataset_cat)+
+  publication_theme_variant_classification+
+  labs(title="")+xlab("")+ylab("")
+
+variantclassification_bottom_splitcol = ggplot(data=variantclassification_ggplotdata_p2[variantclassification_ggplotdata_p2$Cohort=="COLOSSUS",], aes(x=Number_of_variants, y=Variant_classification, fill=Cohort))+
+  geom_bar(position = "dodge", stat = "identity", orientation = "y", show.legend = T, col="#000000")+
+  theme_bw()+
+  scale_fill_manual(values=colour_dataset_cat)+
+  publication_theme_variant_classification+
+  xlab("Number of variants")+ylab("Variant classification")
+
+variant_classification_plot_splitcol = plot_grid(variantclassification_top_splitcol, variantclassification_bottom_splitcol, ncol = 1, rel_heights = c(1,2), align = "hv", scale = 1)
+variant_classification_plot_splitcol
+
+#ggsave(filename = "20260105_COLOSSUS_variant_#plot.pdf", plot = variant_classification_plot_splitcol, width = 6, height = 5)
+
+variantclassification_top_splittcga = ggplot(data=variantclassification_ggplotdata_p1[grepl("TCGA", variantclassification_ggplotdata_p1$Cohort),], aes(x=Number_of_variants, y=Variant_classification, fill=Cohort))+
+  geom_bar(position = "dodge", stat = "identity", orientation = "y", show.legend = F, col="#000000")+
+  theme_bw()+
+  scale_fill_manual(values=colour_dataset_cat)+
+  publication_theme_variant_classification+
+  labs(title="")+xlab("")+ylab("")
+
+variantclassification_bottom_splittcga = ggplot(data=variantclassification_ggplotdata_p2[grepl("TCGA", variantclassification_ggplotdata_p2$Cohort),], aes(x=Number_of_variants, y=Variant_classification, fill=Cohort))+
+  geom_bar(position = "dodge", stat = "identity", orientation = "y", show.legend = T, col="#000000")+
+  theme_bw()+
+  scale_fill_manual(values=colour_dataset_cat)+
+  publication_theme_variant_classification+
+  xlab("Number of variants")+ylab("Variant classification")
+
+variant_classification_plot_splittcga = plot_grid(variantclassification_top_splittcga, variantclassification_bottom_splittcga, ncol = 1, rel_heights = c(1,2), align = "hv", scale = 1)
+variant_classification_plot_splittcga
+#ggsave(filename = "20260105_TCGA_variant_plot#.pdf", plot = variant_classification_plot_splittcga, width = 6, height = 5)
+
+```
+

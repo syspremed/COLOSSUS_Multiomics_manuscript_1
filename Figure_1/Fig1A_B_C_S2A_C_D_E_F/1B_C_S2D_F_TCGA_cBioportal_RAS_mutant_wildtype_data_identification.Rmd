@@ -1,0 +1,435 @@
+---
+title: "TCGA COADREAD (PanCancer Atlas) — MSS/MSI, Hypermutator Filter, and RAS Subsets"
+author: "Sadanandam Lab, Institute of Cancer Research, London"
+date: "March 2026"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+params:
+  clinical_path: "data_clinical_sample.txt"
+  maf_path: "data_mutations.txt"
+  out_prefix: "tcga_coadread_pancanatlas"
+  # toggle which parts to run when knitting
+  run_setup: true
+  run_load_data: true
+  run_align: true
+  run_msi_mss: true
+  run_rm_hyper: true
+  run_maf_subsets: true
+  run_ras_subsets: true
+  run_plots: true
+  run_save: true
+  run_sessioninfo: true
+  
+  # ...
+  plot_order: "total"   # options: "total" or "panel"
+---
+
+<!--
+================================================================================
+  Figure Panel  : 1B, 1C (cohort definition); Supp S2D, S2F
+  Description   : Defines the TCGA COAD/READ (PanCancer Atlas) analysis cohorts: MSI vs MSS
+                  (MSIsensor cut-off 20), removal of hypermutators within MSS (TMB < 10), and
+                  RAS-mutant vs RAS-wildtype subsets; draws oncoplots and writes the barcode
+                  lists used by downstream Figure 1 and Supplementary Figure 1-2 scripts.
+  Input data    : data_clinical_sample.txt
+                  data_mutations.txt
+                  Fig1ABC_CGC_20220314.tsv
+  Output        : tcga_coadread_pancanatlas_oncoplot_MSS_RMH_RAS.pdf
+                  tcga_coadread_pancanatlas_oncoplot_MSS_RMH_RASWT.pdf
+                  tcga_coadread_pancanatlas_maf_subsets.RData
+                  tcga_coadread_pancanatlas_RAS_mutant_MSS_TCGA_barcodes.txt
+                  tcga_coadread_pancanatlas_RAS_wildtype_MSS_TCGA_barcodes.txt
+                  tcga_coadread_pancanatlas_oncoplot_MSS_RMH_RASWT_pathways_Supplementary.pdf
+  R packages    : maftools, data.table, dplyr, stringr, knitr, tools
+  Authors       : Sadanandam Lab, Institute of Cancer Research, London
+  Contact       : anguraj.sadanandam@icr.ac.uk
+  Note          : Set input file names under `params` in the YAML header. Run before the Fig 1A-C notebook.
+================================================================================
+-->
+
+# Overview
+
+This notebook implements the following workflow, split into self-contained sections that can be run independently:
+
+1. Load data (clinical + MAF via **maftools**)
+2. Align clinical and mutation cohorts
+3. Define **MSI vs MSS** by **MSIsensor** cutoff (20)
+4. Remove hypermutators within MSS by **TMB_NONSYNONYMOUS < 10**
+5. Build MAF subsets (MSI, MSS, MSS regular-mutation-load)
+6. Identify **RAS-mutant** vs **RAS-WT** within MSS regular-load
+7. Plot oncoplots
+8. Save outputs (MAF objects + sample ID lists)
+
+> Set file paths and toggles under `params` in the YAML header above (or via **Knit > Knit with Parameters...**).
+
+---
+
+# 0) Setup
+
+
+```{r pressure, echo=FALSE}
+knitr::opts_chunk$set(message = TRUE, warning = TRUE, error = FALSE)
+# packages and preparation
+suppressPackageStartupMessages({
+  library(maftools)
+  library(data.table)
+  library(dplyr)
+  library(stringr)
+})
+
+cat("Params:\n")
+print(list(
+  clinical_path = params$clinical_path,
+  maf_path      = params$maf_path,
+  out_prefix    = params$out_prefix
+))
+
+
+```
+```{r}
+# Clinical reader: skip ALL leading '#' metadata; first non-# line is the header
+read_clinical_cbioportal <- function(path) {
+  lines <- readLines(path, warn = FALSE)
+  first_header <- which(!grepl("^\\s*#", lines))[1]
+  if (is.na(first_header)) stop("No header found in clinical file (only '#' lines?).")
+  data.table::fread(path, sep = "\t", header = TRUE, skip = first_header - 1, data.table = FALSE)
+}
+
+# Back-compat generic reader (used by older chunks)
+read_any_table <- function(path) {
+  ext <- tolower(tools::file_ext(path))
+  if (ext %in% c("tsv","txt")) data.table::fread(path, sep = "\t", data.table = FALSE)
+  else if (ext == "csv")       data.table::fread(path, sep = ",", data.table = FALSE)
+  else                         data.table::fread(path, sep = "\t", data.table = FALSE)
+}
+
+# Pick a column name (case/underscore-insensitive)
+pick_col <- function(df, candidates) {
+  nms <- tolower(gsub("[^a-z0-9]", "_", names(df)))
+  for (cand in candidates) {
+    pat <- tolower(gsub("[^a-z0-9]", "_", cand))
+    hit <- which(nms == pat)
+    if (length(hit) == 1) return(names(df)[hit])
+  }
+  for (cand in candidates) {
+    pat <- tolower(gsub("[^a-z0-9]", "_", cand))
+    hit <- which(startsWith(nms, pat))
+    if (length(hit) == 1) return(names(df)[hit])
+  }
+  stop(sprintf("Could not find a column among candidates: %s", paste(candidates, collapse = ", ")))
+}
+
+patient_from_barcode <- function(x) substr(x, 1, 12)
+
+# --- Writer that outputs clean character lines (drops NA/empty values) ---
+safe_write <- function(x, path) {
+  if (is.null(x)) {
+    warning("Nothing to write for: ", path, " (object is NULL)")
+    return(invisible(NULL))
+  }
+  if (is.data.frame(x) || is.matrix(x)) x <- unlist(x, use.names = FALSE)
+  x <- as.character(x)
+  x <- x[!is.na(x) & nzchar(x)]
+  if (!length(x)) {
+    warning("Nothing to write for: ", path, " (zero-length after cleanup)")
+    return(invisible(NULL))
+  }
+  writeLines(x, con = path)
+}
+
+```
+
+```{r}
+#Load data 
+message("Reading clinical: ", params$clinical_path)
+cbioportal_clinical <- read_any_table(params$clinical_path)
+
+cbioportal_clinical <- cbioportal_clinical[-c(1:4),]
+dim(cbioportal_clinical)
+
+message("Reading MAF: ", params$maf_path)
+cbioportal_maf <- maftools::read.maf(maf = params$maf_path, verbose = FALSE)
+
+# Peek
+dplyr::glimpse(cbioportal_clinical)
+cbioportal_maf
+
+
+```
+
+```{r}
+#Align Clinical and Mutation Cohorts
+# clinical file uses "Sample Identifier"
+sample_col <- pick_col(
+  cbioportal_clinical,
+  c("Sample Identifier","SAMPLE_ID","SAMPLE","Tumor_Sample_Barcode")
+)
+
+tsb_maf <- unique(cbioportal_maf@data$Tumor_Sample_Barcode)
+
+cbioportal_clinical <- cbioportal_clinical %>%
+  mutate(SAMPLE_ID_ALIGNED = .data[[sample_col]]) %>%
+  filter(SAMPLE_ID_ALIGNED %in% tsb_maf)
+
+# Sanity: one sample per patient (first 12 chars)
+pat_counts <- cbioportal_clinical %>%
+  transmute(patient = patient_from_barcode(SAMPLE_ID_ALIGNED)) %>%
+  count(patient, name = "n_samples")
+
+multi_map <- pat_counts %>% filter(n_samples > 1)
+
+if (nrow(multi_map) > 0) {
+  warning("Some patients have multiple aligned samples. Review:\n")
+  print(multi_map)
+} else {
+  message("Sanity check passed: one sample per patient.")
+}
+
+cat("Aligned clinical n=", nrow(cbioportal_clinical), "\n")
+cat("MAF unique TSB n=", length(tsb_maf), "\n")
+
+
+```
+
+```{r}
+#Define MSI vs MSS (MSIsensor cutoff 20)
+
+# clinical file uses "MSIsensor Score" (and sometimes "MSI MANTIS Score")
+msi_col <- pick_col(
+  cbioportal_clinical,
+  c("MSIsensor Score","MSI_SENSOR_SCORE","MSI MANTIS Score","MSI_SCORE","MSISENSOR_SCORE")
+)
+
+cbioportal_clinical[[msi_col]] <- suppressWarnings(as.numeric(cbioportal_clinical[[msi_col]]))
+
+tcga_mss_samples <- cbioportal_clinical %>%
+  filter(.data[[msi_col]] < 20) %>%
+  pull(SAMPLE_ID_ALIGNED) %>% unique()
+
+tcga_msi_samples <- cbioportal_clinical %>%
+  filter(.data[[msi_col]] >= 20) %>%
+  pull(SAMPLE_ID_ALIGNED) %>% unique()
+
+cbioportal_clinical_mss <- cbioportal_clinical %>%
+  filter(SAMPLE_ID_ALIGNED %in% tcga_mss_samples)
+
+cat("MSS samples:", length(tcga_mss_samples), "\n")
+cat("MSI samples:", length(tcga_msi_samples), "\n")
+
+```
+
+
+```{r}
+#Remove Hypermutators within MSS (TMB < 10)
+# clinical file uses "TMB (nonsynonymous)"
+tmb_col <- pick_col(
+  cbioportal_clinical_mss,
+  c("TMB (nonsynonymous)","TMB_NONSYNONYMOUS","TMB_NONSYNONYMOUS_PER_MB","TMB_NONSYN","TMB")
+)
+
+cbioportal_clinical_mss[[tmb_col]] <- suppressWarnings(as.numeric(cbioportal_clinical_mss[[tmb_col]]))
+
+tcga_mss_rmh_samples <- cbioportal_clinical_mss %>%
+  filter(.data[[tmb_col]] < 10) %>%
+  pull(SAMPLE_ID_ALIGNED) %>% unique()
+
+cat("MSS (regular mutation load) samples:", length(tcga_mss_rmh_samples), "\n")
+
+```
+
+```{r}
+#Build MAF Subsets
+cbioportal_maf_msi      <- maftools::subsetMaf(cbioportal_maf,     tsb = tcga_msi_samples,     mafObj = TRUE)
+cbioportal_maf_mss      <- maftools::subsetMaf(cbioportal_maf,     tsb = tcga_mss_samples,     mafObj = TRUE)
+cbioportal_maf_mss_rmh  <- maftools::subsetMaf(cbioportal_maf,     tsb = tcga_mss_rmh_samples, mafObj = TRUE)
+
+cbioportal_maf_msi
+cbioportal_maf_mss
+cbioportal_maf_mss_rmh
+
+```
+```{r}
+#Identify RAS-mutant vs RAS-WT within MSS Regular-load
+tmpmaf <- maftools::subsetMaf(cbioportal_maf_mss_rmh, genes = c("NRAS","KRAS"), mafObj = TRUE)
+tcga_mss_rmh_ras_samples <- unique(tmpmaf@data$Tumor_Sample_Barcode)
+
+cbioportal_maf_mss_rmh_ras <- maftools::subsetMaf(
+  cbioportal_maf_mss_rmh,
+  tsb = tcga_mss_rmh_ras_samples,
+  mafObj = TRUE
+)
+
+tcga_mss_rmh_raswt_samples <- setdiff(tcga_mss_rmh_samples, tcga_mss_rmh_ras_samples)
+
+cbioportal_maf_mss_rmh_raswt <- maftools::subsetMaf(
+  cbioportal_maf_mss_rmh,
+  tsb = tcga_mss_rmh_raswt_samples,
+  mafObj = TRUE
+)
+
+cat("RAS-mutant MSS-RMH samples:", length(tcga_mss_rmh_ras_samples), "\n")
+cat("RAS-WT MSS-RMH samples:", length(tcga_mss_rmh_raswt_samples), "\n")
+
+```
+```{r}
+
+#Oncoplots
+
+genes_to_plot <- c("TP53","KRAS","NRAS")
+
+#pdf(sprintf("%s_oncoplot_MSS_RMH_RAS.pdf", params$out_prefix), width = 10, height = 6)
+maftools::oncoplot(
+  maf = cbioportal_maf_mss_rmh_ras,
+  genes = genes_to_plot,
+  sampleOrder = tcga_mss_rmh_ras_samples
+)
+#dev.off()
+
+#pdf(sprintf("%s_oncoplot_MSS_RMH_RASWT.pdf", params$out_prefix), width = 10, height = 6)
+maftools::oncoplot(
+  maf = cbioportal_maf_mss_rmh_raswt,
+  genes = genes_to_plot,
+  sampleOrder = tcga_mss_rmh_raswt_samples
+)
+#dev.off()
+
+cat("Saved oncoplots:\n",
+    sprintf("%s_oncoplot_MSS_RMH_RAS.pdf", params$out_prefix), "\n",
+    sprintf("%s_oncoplot_MSS_RMH_RASWT.pdf", params$out_prefix), "\n", sep = "")
+
+```
+```{r save, eval=params$run_save}
+
+
+### save files
+
+# --- Ensure we have the vectors even if earlier chunks were skipped ---
+# MSS regular-load exact TSBs
+if (!exists("tsb_mss_rmh")) {
+  tsb_mss_rmh <- unique(cbioportal_maf_mss_rmh@data$Tumor_Sample_Barcode)
+}
+
+# RAS-mutant and RAS-WT exact TSBs
+if (!exists("ras_tsb")) {
+  tmpmaf <- maftools::subsetMaf(cbioportal_maf_mss_rmh, genes = c("NRAS","KRAS"), mafObj = TRUE)
+  ras_tsb <- unique(tmpmaf@data$Tumor_Sample_Barcode)
+}
+if (!exists("raswt_tsb")) {
+  raswt_tsb <- setdiff(tsb_mss_rmh, ras_tsb)
+}
+
+# --- Save MAF objects as before ---
+save(
+  cbioportal_maf_mss_rmh,
+  cbioportal_maf_mss_rmh_raswt,
+  cbioportal_maf_mss_rmh_ras,
+  cbioportal_maf_msi,
+  file = sprintf("%s_maf_subsets.RData", params$out_prefix)
+)
+
+# --- REQUIRED: two separate text files of TCGA barcodes (exact TSBs) ---
+ras_mut_file <- sprintf("%s_RAS_mutant_MSS_TCGA_barcodes.txt", params$out_prefix)
+ras_wt_file  <- sprintf("%s_RAS_wildtype_MSS_TCGA_barcodes.txt", params$out_prefix)
+safe_write(ras_tsb,   ras_mut_file)
+safe_write(raswt_tsb, ras_wt_file)
+
+
+cat("Saved files:\n",
+    "- MAF subsets RData: ", sprintf("%s_maf_subsets.RData", params$out_prefix), "\n",
+    "- RAS-mutant TCGA barcodes: ", ras_mut_file, "\n",
+    "- RAS-wildtype TCGA barcodes: ", ras_wt_file, "\n", sep = "")
+
+```
+```{r}
+#Read in the CGC file
+cgc <- read.table(
+  "Fig1ABC_CGC_20220314.tsv",
+  sep = "\t",
+  header = TRUE,
+  quote = "",
+  comment.char = ""
+)
+```
+
+```{r}
+## 1) Gene frequencies across ALL MSS (RASmut + RASWT)
+gene_summary_mss <- maftools::getGeneSummary(cbioportal_maf_mss)
+
+## 2) Keep CGC genes, but make sure NRAS is always considered
+##    (in case of naming quirks or if it wouldn't otherwise make the top-20)
+candidate_genes <- union(cgc$Gene.Symbol, "NRAS")
+ranked_mss <- gene_summary_mss %>%
+  dplyr::filter(Hugo_Symbol %in% candidate_genes) %>%
+  dplyr::arrange(dplyr::desc(AlteredSamples))
+
+## 3) Build the final 20-gene list with NRAS guaranteed
+if ("NRAS" %in% head(ranked_mss$Hugo_Symbol, 20)) {
+  top20_tbl <- dplyr::slice_head(ranked_mss, n = 20)
+} else {
+  # take top 19 excluding NRAS, then add NRAS, then re-order by frequency
+  top19_ex_nras <- ranked_mss %>%
+    dplyr::filter(Hugo_Symbol != "NRAS") %>%
+    dplyr::slice_head(n = 19)
+  nras_row <- ranked_mss %>% dplyr::filter(Hugo_Symbol == "NRAS")
+  top20_tbl <- dplyr::bind_rows(top19_ex_nras, nras_row) %>%
+    dplyr::arrange(dplyr::desc(AlteredSamples))
+}
+
+top20_genes_mss <- top20_tbl$Hugo_Symbol
+
+## (Optional) sanity check
+message("Top 20 MSS genes used (NRAS forced-in if needed):")
+print(top20_genes_mss)
+
+```
+
+```{r}
+#Make the Oncoplot
+#NBEA - 5%, KMT2C - 4%
+#Oncoplot for RAS-mutant MSS samples
+maftools::oncoplot(
+  maf = cbioportal_maf_mss_rmh_ras,
+  genes = top20_genes_mss,
+  sortByMutation = TRUE,       # order samples by mutation load
+  sortByAnnotation = FALSE, # keep gene order as supplied
+  writeMatrix = TRUE  
+)
+```
+
+```{r}
+#MSS RAS wiltype - same set of genes from RAS mt
+maftools::oncoplot(
+  maf = cbioportal_maf_mss_rmh_raswt,
+  genes = top20_genes_mss,
+  sortByMutation = TRUE,
+  sortByAnnotation = FALSE,
+  writeMatrix = TRUE 
+)
+```
+
+```{r}
+#pathway for RAS mutant samples 
+pws = pathways(maf = cbioportal_maf_mss_rmh_ras, plotType = 'treemap')
+plotPathways(maf = cbioportal_maf_mss_rmh_ras, pathlist = pws)
+```
+
+```{r}
+#pathway for RAS wildtype samples 
+pws_wt = pathways(maf = cbioportal_maf_mss_rmh_raswt, plotType = 'treemap')
+#pdf(sprintf("%s_oncoplot_MSS_RMH_RASWT_pathways_Supplementary.pdf", params$out_prefix), width = 10, height = 6)
+plotPathways(maf = cbioportal_maf_mss_rmh_raswt, pathlist = pws_wt)
+#dev.off()
+```
+
+
+```{r}
+sessionInfo()
+
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
