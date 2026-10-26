@@ -1,0 +1,101 @@
+---
+title: "Supplementary Figure S2B – TCGA COAD/READ sample selection flowchart (MSS RAS-mt vs RAS-wt)"
+author: "Sadanandam Lab, Institute of Cancer Research, London"
+date: "March 2026"
+output: html_notebook
+---
+
+<!--
+================================================================================
+  Figure Panel  : Supp S2B
+  Description   : CONSORT-style flowchart of TCGA COAD/READ sample selection
+                  (594 clinical samples -> 216 MSS RAS-mutant / 226 MSS RAS-wildtype).
+  Input data    : none (sample counts are written into the script)
+  Output        : Flowchart_TCGA_RAS_mutant_wildtype.png
+                  Flowchart_TCGA_RAS_mutant_wildtype.pdf
+  R packages    : DiagrammeR, DiagrammeRsvg, rsvg
+  Authors       : Sadanandam Lab, Institute of Cancer Research, London
+  Contact       : anguraj.sadanandam@icr.ac.uk
+  Note          : Counts are taken from the cohort-definition notebook (Fig1A_B_C).
+================================================================================
+-->
+
+```{r}
+# ---- Flowchart of sample counts (TCGA COAD/READ) ----
+# Counts used:
+# - Clinical samples = 594  # from clinical glimpse rows 
+# - Aligned clinical + mutation samples = 528  # alignment sanity check 
+# - MSS samples = 468; MSI samples = 60  # MSIsensor cutoff 20 
+# - MSS (regular mutation load) = 442  # TMB < 10 filter within MSS 
+# - RAS-mutant MSS = 216; RAS-WT MSS = 226  # KRAS/NRAS split within MSS regular-load 
+
+# install.packages(c("DiagrammeR", "DiagrammeRsvg", "rsvg"), dependencies = TRUE)
+suppressPackageStartupMessages({
+  library(DiagrammeR)
+  library(DiagrammeRsvg)
+  library(rsvg)
+})
+
+# ---- Parameters (edit counts here if needed) ----
+counts <- list(
+  clinical            = 594,
+  aligned             = 528,
+  mss                 = 468,
+  msi                 = 60,
+  mss_reg_load        = 442,
+  ras_mutant_mss      = 216,
+  ras_wt_mss          = 226
+)
+
+# ---- Build Graphviz DOT ----
+dot <- sprintf('
+digraph G {
+  graph [rankdir=TB, nodesep=0.35, ranksep=0.5]
+  node  [shape=box, style="rounded,filled", fillcolor="#cfe8ff", fontname="Helvetica", penwidth=1.2]
+  edge  [penwidth=1.1]
+
+  clinical   [label="Clinical samples\\n(n=%d)"];
+  aligned    [label="Aligned clinical + mutation samples\\n(n=%d)"];
+  mss        [label="MSS samples\\n(n=%d)"];
+  msi        [label="MSI samples\\n(n=%d)"];
+  mssrl      [label="MSS (regular mutation load)\\n(n=%d)"];
+  rasmut     [label="RAS-mutant MSS\\n(n=%d)"];
+  raswt      [label="RAS-WT MSS\\n(n=%d)"];
+
+  clinical -> aligned;
+  aligned  -> mss;
+  aligned  -> msi;
+  mss      -> mssrl;
+  mssrl    -> rasmut;
+  mssrl    -> raswt;
+
+  {rank=same; mss; msi}
+  {rank=same; rasmut; raswt}
+}
+',
+  counts$clinical, counts$aligned, counts$mss, counts$msi,
+  counts$mss_reg_load, counts$ras_mutant_mss, counts$ras_wt_mss
+)
+
+# ---- Render ----
+g <- DiagrammeR::grViz(dot)
+
+# Show in viewer (RStudio/Quarto)
+g
+
+# ---- Save to files ----
+# PNG
+png_file <- "Flowchart_TCGA_RAS_mutant_wildtype.png"
+svg_txt  <- DiagrammeRsvg::export_svg(g)
+rsvg::rsvg_png(charToRaw(svg_txt), file = png_file, width = 1600, height = 1200)
+
+# PDF (optional)
+pdf_file <- "Flowchart_TCGA_RAS_mutant_wildtype.pdf"
+rsvg::rsvg_pdf(charToRaw(svg_txt), file = pdf_file, width = 1600, height = 1200)
+
+message("Saved: ", normalizePath(png_file))
+message("Saved: ", normalizePath(pdf_file))
+
+```
+
+
