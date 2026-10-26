@@ -1,0 +1,1526 @@
+---
+title: "Figure 5I-J – PNI metabolites and RPPA protein interactions"
+author: "Sadanandam Lab, Institute of Cancer Research, London"
+date: "May 2026"
+output: html_notebook
+---
+
+<!--
+================================================================================
+  Figure Panel  : 5I, 5J
+  Description   : RPPA total/phosphoprotein ~ PNI x metabolite interaction stability across 100
+                  70/30 train/test resamples (COLOSSUS St2/3 MSS RAS-mt, n = 121): 5I train vs test
+                  interaction estimates; 5J heatmap of the top reproducible protein-metabolite pairs.
+  Input data    : scaledLoadingsCoefficients.txt
+                  20200902_ColossusResults_Metabolomics_2_tissue_weight_Centre_run_batch_corrected_data.txt
+                  MV_clustering.txt
+                  20250426_VHIO_retrospective_clinical_PNI_Lym_RFS_PNI_NA_removed.txt
+                  20200803_Colossus_RPPA_datasheet_June15_normalized_data_Jochen.txt
+  Output        : train_vs_test_estimates_recommended_hits_clean.pdf
+                  train_vs_test_estimates_recommended_hits_clean.png
+                  train_test_plot_dataframe_clean.txt
+                  train_test_top15_labelled_hits_clean.txt
+                  summary_stats.txt
+                  summary_stats_sig.txt
+                  train_test_duplicate_like_labels_diagnostic.txt
+                  frequency_validation_PNI_metabolite_protein_hits_SDgt0.5.pdf
+                  frequency_validation_PNI_metabolite_protein_hits_SDgt0.5.png
+                  train_test_plot_dataframe_SDgt0.5.txt
+                  train_test_top15_labelled_hits_SDgt0.5.txt
+                  duplicate_like_labels_diagnostic_SDgt0.5.txt
+                  dotplot_positive_strict_scaled01.pdf
+                  dotplot_positive_strict_scaled01.png
+                  positive_hits_table_scaled01.txt
+                  heatmap_dotoverlay_strict_direction_trainscaled.pdf
+                  heatmap_dotoverlay_strict_direction_trainscaled.png
+                  heatmap_dotoverlay_top_hits_table.txt
+                  20250512_COLOSSUS_PNI_metabolites_protein_1000_iterations_density_plot_RPPA_Data_bubble_plot.pdf
+  R packages    : ggplot2, gridExtra, tidyverse, wesanderson, ggpubr, ggrepel, dplyr, parallel, stringr, scales
+  Authors       : Sadanandam Lab, Institute of Cancer Research, London
+  Contact       : anguraj.sadanandam@icr.ac.uk
+  Note          : Some output file names in the code keep draft (pre-publication) labels, e.g. MV2/MV6 for MV5.
+================================================================================
+-->
+
+```{r library}
+
+library(ggplot2)
+library(gridExtra)
+library(tidyverse)
+library(wesanderson)
+library(ggpubr)
+library(ggrepel)
+library(dplyr)
+library(parallel)
+```
+
+```{r}
+
+publication_theme = theme(
+  title = element_text(size = 20),
+  axis.title.x = element_text(size = 16),
+  axis.text.x = element_text(size = 14),
+  axis.title.y = element_text(size = 16),
+  axis.text.y = element_text(size = 14)
+)
+
+```
+
+```{r}
+# read scaled coefficients
+loadings <- read.delim("scaledLoadingsCoefficients.txt")
+dim(loadings)
+
+# choose those metabolites from MV2 and MV6 with cutoff of 3
+
+mv2_loadings_nna <- cbind(rownames(loadings)[which(!is.na(loadings$MV5))], loadings$MV5[which(!is.na(loadings$MV5))])
+dim(mv2_loadings_nna)
+
+mv2_loadings_nna_unk <- cbind(mv2_loadings_nna[-grep("unknown", mv2_loadings_nna[,1], ignore.case = TRUE),1],
+                              mv2_loadings_nna[-grep("unknown", mv2_loadings_nna[,1], ignore.case = TRUE),2])
+dim(mv2_loadings_nna_unk)
+
+mv2_loadings_nna_unk_sig <- cbind(
+  mv2_loadings_nna_unk[(as.numeric(mv2_loadings_nna_unk[,2]) > 2 | as.numeric(mv2_loadings_nna_unk[,2]) < -2),1],
+  mv2_loadings_nna_unk[(as.numeric(mv2_loadings_nna_unk[,2]) > 2 | as.numeric(mv2_loadings_nna_unk[,2]) < -2),2]
+)
+dim(mv2_loadings_nna_unk_sig)
+
+```
+
+```{r}
+# read metabolomics data
+metab <- read.delim("20200902_ColossusResults_Metabolomics_2_tissue_weight_Centre_run_batch_corrected_data.txt", 
+                    stringsAsFactors = FALSE)
+dim(metab)
+```
+
+```{r}
+# match metabolites between metabolic dataset and mv loadings
+known <- unique(c(mv2_loadings_nna_unk_sig[,1]))
+metabolites <- metab$Metabolites
+
+# safe parsing function
+parse_entry_safe <- function(entry) {
+  entry <- iconv(entry, to = "UTF-8", sub = "byte")
+  parts <- unlist(strsplit(entry, "_"))
+  if (length(parts) < 3) return(NULL)
+  
+  name <- paste0(parts[1:(length(parts) - 2)], collapse = "_")
+  mass <- suppressWarnings(as.numeric(parts[length(parts) - 1]))
+  rt <- suppressWarnings(as.numeric(parts[length(parts)]))
+  
+  if (is.na(mass) || is.na(rt)) return(NULL)
+  
+  return(list(
+    original = entry,
+    name = gsub("[[:punct:]]", "", name),
+    mass = mass,
+    rt = rt
+  ))
+}
+
+known_list <- Filter(Negate(is.null), lapply(known, parse_entry_safe))
+metabolites_list <- Filter(Negate(is.null), lapply(metabolites, parse_entry_safe))
+
+known_df <- as.data.frame(do.call(rbind, known_list), stringsAsFactors = FALSE)
+metabolites_df <- as.data.frame(do.call(rbind, metabolites_list), stringsAsFactors = FALSE)
+
+known_df$mass <- as.numeric(known_df$mass)
+known_df$rt <- as.numeric(known_df$rt)
+metabolites_df$mass <- as.numeric(metabolites_df$mass)
+metabolites_df$rt <- as.numeric(metabolites_df$rt)
+
+delta_mass <- 0.02
+delta_rt <- 0.1
+
+matched_indices <- sapply(1:nrow(known_df), function(i) {
+  matches <- which(abs(known_df$mass[i] - metabolites_df$mass) <= delta_mass &
+                   abs(known_df$rt[i] - metabolites_df$rt) <= delta_rt)
+  if (length(matches) > 0) return(matches[1]) else return(NA)
+})
+
+matched_indices <- matched_indices[!is.na(matched_indices)]
+matched_indices <- unique(matched_indices)
+
+print(matched_indices)
+
+head(metab[matched_indices, 1:5])
+
+metab_matched <- metab[matched_indices, ]
+dim(metab_matched)
+```
+
+```{r}
+# reading MVs
+mv <- read.delim("MV_clustering.txt", 
+                 stringsAsFactors = FALSE)
+dim(mv)
+
+m_mv <- match(mv$samples, colnames(metab_matched))
+w_mv <- which(!is.na(m_mv))
+
+metab_matched_1 <- metab_matched[, c(1, m_mv[w_mv]), drop = FALSE]
+rownames(metab_matched_1) <- metab_matched_1[,1]
+dim(metab_matched_1)
+head(metab_matched_1[, 1:min(5, ncol(metab_matched_1))])
+```
+
+```{r}
+# clinical data
+clin <- read.delim("20250426_VHIO_retrospective_clinical_PNI_Lym_RFS_PNI_NA_removed.txt", 
+                   stringsAsFactors = FALSE)
+dim(clin)
+
+m_clin <- match(gsub("\\.", "-", colnames(metab_matched)[-1]), clin$COLOSSUS_ID)
+w_clin <- which(!is.na(m_clin))
+
+clin_1 <- clin[m_clin[w_clin], ]
+dim(clin_1)
+
+mmet <- t(metab_matched[, (w_clin + 1), drop = FALSE])
+colnames(mmet) <- metab_matched[,1]
+
+metab_clin <- cbind(clin_1, sample_id = colnames(metab_matched)[(w_clin + 1)], mmet)
+dim(metab_clin)
+
+# keep same object name used later in script
+metab_clin_sel <- metab_clin
+
+# convert PNI to binary
+metab_clin_sel$PNI <- ifelse(tolower(trimws(metab_clin_sel$perineural_invasion)) == "yes", 1, 0)
+```
+
+
+```{r}
+# proteins ~ PNI + metabolites with stratified 70/30 train-test validation
+# Models with perfect separation are excluded
+set.seed(121)
+
+protein_exp <- read.delim("20200803_Colossus_RPPA_datasheet_June15_normalized_data_Jochen.txt", stringsAsFactors = FALSE, row.names = 1)
+
+dim(protein_exp)
+
+# keep only proteins with SD > 0
+protein_numeric <- protein_exp
+protein_numeric[, -1] <- lapply(protein_numeric[, -1, drop = FALSE], as.numeric)
+
+ssdp <- apply(protein_numeric[, -1, drop = FALSE], 1, sd, na.rm = TRUE)
+w_ssdp <- which(ssdp > 0.5)
+length(w_ssdp)
+
+protein_exp_sd <- protein_numeric[w_ssdp, ]
+dim(protein_exp_sd)
+
+# 1. Transpose protein matrix: make samples rows, proteins columns
+protein_long <- as.data.frame(t(protein_exp_sd))
+protein_long$sample_id <- rownames(protein_long)
+
+# 2. Fix sample ID format to match metab_clin_sel$COLOSSUS_ID
+# If protein colnames are like COL.268.R.001_FP_001, convert to COL-268-R-001
+protein_long$COLOSSUS_ID <- substr(gsub("\\.", "-", protein_long$sample_id), 1, 13)
+
+# metabolites
+#selected_mets <- c(
+ # "(S)-2-Methylbutanoic acid",
+  #"2-Ethylhydracrylic acid_118.06_2.84",
+ # "2-Ethylhydracrylic acid_118.06_3.42",
+  #"4-Ethyloctanoic acid",
+  #"Fumaric acid",
+  #"Butyric acid",
+  #"Galactitol",
+#  "Hydrocinnamic acid",
+ # "Ketoleucine",
+  #"Palmitic acid",
+  #"Taurine",
+  #"Undecanoic acid"
+#)
+
+selected_mets <- c(
+  "Butyric acid_88.05_3.29",
+  #"(S)-2-Methylbutanoic acid_102.07_3.09",
+  #"2-Ethylhydracrylic acid_118.06_3.42",
+  "2-Ethylhydracrylic acid_118.06_3.59",
+  #"Ketoleucine_130.06_2.98",
+  "2-Methylbenzoic acid_136.05_3.07",
+ # "Hydrocinnamic acid_150.07_2.96",
+  "4-Ethyloctanoic acid_172.15_2.92",
+  "Galactitol_182.08_12.08"#,
+  #"Palmitic acid_256.24_2.91"
+)
+
+colnames(metab_clin_sel) <- iconv(colnames(metab_clin_sel), to = "UTF-8", sub = "")
+selected_mets <- iconv(selected_mets, to = "UTF-8", sub = "")
+
+met_cols <- unlist(lapply(selected_mets, function(x) {
+  grep(
+    paste0("^", gsub("([][{}()+*^$.|\\\\?])", "\\\\\\1", x), "$|^",
+           gsub("([][{}()+*^$.|\\\\?])", "\\\\\\1", x), "_"),
+    colnames(metab_clin_sel),
+    value = TRUE
+  )
+}))
+met_cols <- unique(met_cols)
+
+# merge
+combined_data <- merge(
+  protein_long,
+  metab_clin_sel[, c("COLOSSUS_ID", "PNI", met_cols), drop = FALSE],
+  by = "COLOSSUS_ID"
+)
+
+dim(combined_data)
+
+# make sure PNI is numeric 0/1
+combined_data$PNI <- as.numeric(as.character(combined_data$PNI))
+
+table(combined_data$PNI)
+
+protein_names <- setdiff(colnames(protein_long), c("sample_id", "COLOSSUS_ID"))
+metabolite_names <- met_cols
+
+model_grid <- expand.grid(
+  protein = protein_names,
+  metabolite = metabolite_names,
+  stringsAsFactors = FALSE
+)
+
+# parameters
+n_iter <- 100
+p_thresh <- 0.05
+
+all_results_list <- list()
+
+skip_counts <- c(
+  too_few_rows = 0,
+  single_pni_class = 0,
+  train_model_fail = 0,
+  test_model_fail = 0,
+  perfect_fit_train = 0,
+  perfect_fit_test = 0,
+  no_interaction_train = 0,
+  no_interaction_test = 0,
+  non_finite_interaction_train = 0,
+  non_finite_interaction_test = 0
+)
+
+for (i in 1:n_iter) {
+  cat("Iteration:", i, "\n")
+  
+  # stratified split by PNI
+  idx_pni0 <- which(combined_data$PNI == 0)
+  idx_pni1 <- which(combined_data$PNI == 1)
+  
+  n_train0 <- max(2, floor(0.7 * length(idx_pni0)))
+  n_train1 <- max(2, floor(0.7 * length(idx_pni1)))
+  
+  train_idx0 <- sample(idx_pni0, size = n_train0, replace = FALSE)
+  train_idx1 <- sample(idx_pni1, size = n_train1, replace = FALSE)
+  
+  train_idx <- c(train_idx0, train_idx1)
+  test_idx  <- setdiff(seq_len(nrow(combined_data)), train_idx)
+  
+  train_data <- combined_data[train_idx, , drop = FALSE]
+  test_data  <- combined_data[test_idx, , drop = FALSE]
+  
+  iter_results <- list()
+  
+  for (j in seq_len(nrow(model_grid))) {
+    protein <- model_grid$protein[j]
+    metabolite <- model_grid$metabolite[j]
+    
+    # training data
+    df_train <- train_data[, c(protein, "PNI", metabolite), drop = FALSE]
+    colnames(df_train) <- c("protein_val", "PNI", "met_val")
+    
+    df_train$protein_val <- as.numeric(df_train$protein_val)
+    df_train$PNI <- as.numeric(df_train$PNI)
+    df_train$met_val <- as.numeric(df_train$met_val)
+    
+    df_train <- df_train[
+      complete.cases(df_train) &
+        is.finite(df_train$protein_val) &
+        is.finite(df_train$met_val),
+      , drop = FALSE
+    ]
+    
+    # test data
+    df_test <- test_data[, c(protein, "PNI", metabolite), drop = FALSE]
+    colnames(df_test) <- c("protein_val", "PNI", "met_val")
+    
+    df_test$protein_val <- as.numeric(df_test$protein_val)
+    df_test$PNI <- as.numeric(df_test$PNI)
+    df_test$met_val <- as.numeric(df_test$met_val)
+    
+    df_test <- df_test[
+      complete.cases(df_test) &
+        is.finite(df_test$protein_val) &
+        is.finite(df_test$met_val),
+      , drop = FALSE
+    ]
+    
+    if (nrow(df_train) <= 4 || nrow(df_test) <= 4) {
+      skip_counts["too_few_rows"] <- skip_counts["too_few_rows"] + 1
+      next
+    }
+    
+    if (length(unique(df_train$PNI)) < 2 || length(unique(df_test$PNI)) < 2) {
+      skip_counts["single_pni_class"] <- skip_counts["single_pni_class"] + 1
+      next
+    }
+    
+    model_train <- tryCatch(
+      lm(protein_val ~ PNI * met_val, data = df_train),
+      error = function(e) NULL
+    )
+    if (is.null(model_train)) {
+      skip_counts["train_model_fail"] <- skip_counts["train_model_fail"] + 1
+      next
+    }
+    
+    model_test <- tryCatch(
+      lm(protein_val ~ PNI * met_val, data = df_test),
+      error = function(e) NULL
+    )
+    if (is.null(model_test)) {
+      skip_counts["test_model_fail"] <- skip_counts["test_model_fail"] + 1
+      next
+    }
+    
+    sm_train <- summary(model_train)
+    sm_test  <- summary(model_test)
+    
+    # remove perfect / saturated / unusable fits
+    if (df.residual(model_train) <= 0 ||
+        !is.finite(sm_train$r.squared) ||
+        sm_train$r.squared >= 0.9999) {
+      skip_counts["perfect_fit_train"] <- skip_counts["perfect_fit_train"] + 1
+      next
+    }
+    
+    if (df.residual(model_test) <= 0 ||
+        !is.finite(sm_test$r.squared) ||
+        sm_test$r.squared >= 0.9999) {
+      skip_counts["perfect_fit_test"] <- skip_counts["perfect_fit_test"] + 1
+      next
+    }
+    
+    summ_train <- sm_train$coefficients
+    summ_test  <- sm_test$coefficients
+    
+    if (!("PNI:met_val" %in% rownames(summ_train))) {
+      skip_counts["no_interaction_train"] <- skip_counts["no_interaction_train"] + 1
+      next
+    }
+    
+    if (!("PNI:met_val" %in% rownames(summ_test))) {
+      skip_counts["no_interaction_test"] <- skip_counts["no_interaction_test"] + 1
+      next
+    }
+    
+    est_train  <- summ_train["PNI:met_val", "Estimate"]
+    pval_train <- summ_train["PNI:met_val", "Pr(>|t|)"]
+    r2_train   <- sm_train$r.squared
+    
+    est_test  <- summ_test["PNI:met_val", "Estimate"]
+    pval_test <- summ_test["PNI:met_val", "Pr(>|t|)"]
+    r2_test   <- sm_test$r.squared
+    
+    if (!is.finite(est_train) || !is.finite(pval_train)) {
+      skip_counts["non_finite_interaction_train"] <- skip_counts["non_finite_interaction_train"] + 1
+      next
+    }
+    
+    if (!is.finite(est_test) || !is.finite(pval_test)) {
+      skip_counts["non_finite_interaction_test"] <- skip_counts["non_finite_interaction_test"] + 1
+      next
+    }
+    
+    sig_train <- ifelse(!is.na(pval_train) && pval_train < p_thresh, 1, 0)
+    sig_test  <- ifelse(!is.na(pval_test) && pval_test < p_thresh, 1, 0)
+    
+    same_sign <- ifelse(
+      !is.na(est_train) && !is.na(est_test) && sign(est_train) == sign(est_test),
+      1, 0
+    )
+    
+    validated_direction <- ifelse(sig_train == 1 && same_sign == 1, 1, 0)
+    validated_strict    <- ifelse(sig_train == 1 && sig_test == 1 && same_sign == 1, 1, 0)
+    
+    iter_results[[length(iter_results) + 1]] <- data.frame(
+      iteration = i,
+      protein = protein,
+      metabolite = metabolite,
+      estimate_train = est_train,
+      pval_train = pval_train,
+      r2_train = r2_train,
+      estimate_test = est_test,
+      pval_test = pval_test,
+      r2_test = r2_test,
+      significant_train = sig_train,
+      significant_test = sig_test,
+      same_sign = same_sign,
+      validated_direction = validated_direction,
+      validated_strict = validated_strict,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  if (length(iter_results) > 0) {
+    all_results_list[[length(all_results_list) + 1]] <- do.call(rbind, iter_results)
+  }
+}
+
+all_results <- do.call(rbind, all_results_list)
+
+if (is.null(all_results) || nrow(all_results) == 0) {
+  stop("No valid train-test interaction results were generated. Inspect skip_counts.")
+}
+
+summary_stats <- all_results %>%
+  group_by(protein, metabolite) %>%
+  summarise(
+    n_tested = n(),
+    n_train_hits = sum(significant_train, na.rm = TRUE),
+    n_test_hits = sum(significant_test, na.rm = TRUE),
+    n_same_sign = sum(same_sign, na.rm = TRUE),
+    n_validated_direction = sum(validated_direction, na.rm = TRUE),
+    n_validated_strict = sum(validated_strict, na.rm = TRUE),
+    frequency_train = mean(significant_train, na.rm = TRUE),
+    frequency_test = mean(significant_test, na.rm = TRUE),
+    frequency_same_sign = mean(same_sign, na.rm = TRUE),
+    frequency_validated_direction = mean(validated_direction, na.rm = TRUE),
+    frequency_validated_strict = mean(validated_strict, na.rm = TRUE),
+    mean_estimate_train = mean(estimate_train, na.rm = TRUE),
+    median_estimate_train = median(estimate_train, na.rm = TRUE),
+    mean_estimate_test = mean(estimate_test, na.rm = TRUE),
+    median_estimate_test = median(estimate_test, na.rm = TRUE),
+    mean_pval_train = mean(pval_train, na.rm = TRUE),
+    median_pval_train = median(pval_train, na.rm = TRUE),
+    mean_pval_test = mean(pval_test, na.rm = TRUE),
+    median_pval_test = median(pval_test, na.rm = TRUE),
+    mean_r2_train = mean(r2_train, na.rm = TRUE),
+    mean_r2_test = mean(r2_test, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(frequency_validated_direction),
+          desc(frequency_train),
+          median_pval_train)
+
+print(skip_counts)
+print(summary_stats)
+
+# recommended primary hits:
+summary_stats_sig <- summary_stats %>%
+  filter(frequency_train >= 0.6,
+         frequency_validated_direction >= 0.6) %>%
+  arrange(desc(frequency_validated_direction),
+          desc(frequency_train),
+          median_pval_train)
+
+print(summary_stats_sig)
+length(unique(summary_stats_sig$protein))
+```
+
+```{r}
+#positive RPPA proteins
+if ("median_estimate_test" %in% colnames(summary_stats_sig)) {
+  positive_hits <- summary_stats_sig %>%
+    filter(median_estimate_train > 0,
+           median_estimate_test > 0)
+} else {
+  positive_hits <- summary_stats_sig %>%
+    filter(median_estimate_train > 0)
+}
+
+```
+
+
+```{r}
+#density plot
+library(ggplot2)
+library(dplyr)
+
+# Step 1: FDR adjustment
+positive_hits <- positive_hits %>%
+  mutate(pval_fdr = p.adjust(median_pval_train, method = "fdr"))
+
+# Step 2: Select top 20 by raw p-value
+top_20 <- positive_hits %>%
+  arrange(median_pval_train) %>%
+  slice_head(n = 20)
+
+# Step 3: Add all interactions involving FAK or PDK1
+# Replace with correct IDs if needed (e.g., Q05397 for FAK, Q15118 for PDK1)
+target_proteins <- c("FAK", "PDK1(S241)")
+target_rows <- positive_hits %>%
+  filter(protein %in% target_proteins)
+
+# Combine and remove duplicates
+plot_data <- bind_rows(top_20, target_rows) %>%
+  distinct(protein, metabolite, .keep_all = TRUE) %>%
+  mutate(
+    interaction = paste(protein, metabolite, sep = " × "),
+    neg_log_fdr = -log10(pval_fdr)
+  )
+
+# Step 4: Plot
+#pdf("20250512_COLOSSUS_PNI_metabolites_protein_1000_iterations_density_plot_RPPA_Data_bubble_plot.pdf")
+ggplot(plot_data, aes(x = reorder(interaction, neg_log_fdr), y = neg_log_fdr)) +
+  geom_point(aes(size = neg_log_fdr, color = median_pval_train), alpha = 0.9) +
+  scale_size(range = c(3, 10)) +
+  scale_color_gradient(low = "#2166AC", high = "#FEE090", trans = "log",
+                       name = "Raw p-value", labels = scales::scientific) +
+  coord_flip() +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 12),
+    plot.title = element_text(face = "bold", size = 16)
+  ) +
+  labs(
+    title = "Top 20 Interactions + FAK and PDK1",
+    subtitle = "Color = raw p-value; Size = −log10(FDR-adjusted p-value)",
+    x = "Protein × Metabolite",
+    y = expression("-log"[10]*"(FDR-adjusted p-value)")
+  )
+#dev.off()
+
+
+```
+
+
+```{r}
+
+## =========================================================
+## Clean Train vs Test scatter plot with correct labelling
+## =========================================================
+
+library(ggplot2)
+library(dplyr)
+library(ggrepel)
+library(stringr)
+library(scales)
+
+## ---------------------------------------------------------
+## 1. Output directory
+## ---------------------------------------------------------
+out_dir_main <- "5I_J"
+dir.create(out_dir_main, recursive = TRUE, showWarnings = FALSE)
+
+## ---------------------------------------------------------
+## 2. Check required objects
+## ---------------------------------------------------------
+stopifnot(exists("summary_stats"))
+stopifnot(exists("summary_stats_sig"))
+
+required_cols_summary <- c(
+  "protein", "metabolite",
+  "mean_estimate_train", "mean_estimate_test",
+  "median_pval_train",
+  "frequency_train", "frequency_validated_direction"
+)
+
+missing_summary <- setdiff(required_cols_summary, colnames(summary_stats))
+if (length(missing_summary) > 0) {
+  stop("summary_stats is missing required columns: ",
+       paste(missing_summary, collapse = ", "))
+}
+
+required_cols_sig <- c("protein", "metabolite")
+missing_sig <- setdiff(required_cols_sig, colnames(summary_stats_sig))
+if (length(missing_sig) > 0) {
+  stop("summary_stats_sig is missing required columns: ",
+       paste(missing_sig, collapse = ", "))
+}
+
+## ---------------------------------------------------------
+## 3. Helper functions for metabolite labels
+## ---------------------------------------------------------
+extract_metabolite_parts <- function(x) {
+  x <- as.character(x)
+  x <- iconv(x, to = "UTF-8", sub = "")
+  parts <- unlist(strsplit(x, "_", fixed = TRUE))
+
+  if (length(parts) >= 3) {
+    list(
+      name = paste(parts[1:(length(parts) - 2)], collapse = "_"),
+      mass = parts[length(parts) - 1],
+      rt   = parts[length(parts)]
+    )
+  } else {
+    list(
+      name = x,
+      mass = NA_character_,
+      rt   = NA_character_
+    )
+  }
+}
+
+clean_metabolite_name <- function(x) {
+  p <- extract_metabolite_parts(x)
+  nm <- p$name
+  nm <- gsub("^X\\.*", "", nm)
+  nm <- gsub("\\.", " ", nm)
+  nm <- gsub("_", " ", nm)
+  nm <- gsub("\\s+", " ", nm)
+  trimws(nm)
+}
+
+metabolite_label_exact <- function(x, digits_mass = 2, digits_rt = 2) {
+  p <- extract_metabolite_parts(x)
+  nm <- clean_metabolite_name(x)
+
+  mass_num <- suppressWarnings(as.numeric(p$mass))
+  rt_num   <- suppressWarnings(as.numeric(p$rt))
+
+  mass_txt <- if (!is.na(mass_num)) format(round(mass_num, digits_mass), nsmall = digits_mass) else p$mass
+  rt_txt   <- if (!is.na(rt_num))   format(round(rt_num, digits_rt),   nsmall = digits_rt)   else p$rt
+
+  if (!is.na(mass_txt) && !is.na(rt_txt) && nzchar(mass_txt) && nzchar(rt_txt)) {
+    paste0(nm, " [m/z ", mass_txt, ", RT ", rt_txt, "]")
+  } else {
+    nm
+  }
+}
+
+make_hit_label <- function(protein, metabolite, width = 34) {
+  met_lab <- metabolite_label_exact(metabolite)
+  met_lab <- stringr::str_trunc(met_lab, width = width, side = "right")
+  paste0(protein, "\n", met_lab)
+}
+
+## ---------------------------------------------------------
+## 4. Build plotting data
+## ---------------------------------------------------------
+sig_keys <- unique(paste(summary_stats_sig$protein, summary_stats_sig$metabolite, sep = "___"))
+
+plot_df <- summary_stats %>%
+  mutate(
+    protein = as.character(protein),
+    metabolite = as.character(metabolite),
+    clean_met = vapply(metabolite, clean_metabolite_name, character(1)),
+    exact_met_label = vapply(metabolite, metabolite_label_exact, character(1)),
+    hit_label = mapply(make_hit_label, protein, metabolite, USE.NAMES = FALSE),
+    recommended_hit = paste(protein, metabolite, sep = "___") %in% sig_keys,
+    endpoint_score = abs(mean_estimate_train) + abs(mean_estimate_test)
+  )
+
+## optional safety filters
+plot_df <- plot_df %>%
+  filter(
+    is.finite(mean_estimate_train),
+    is.finite(mean_estimate_test),
+    is.finite(frequency_validated_direction)
+  )
+
+## ---------------------------------------------------------
+## 5. Label data:
+## label only recommended hits, but avoid repeated-looking labels
+## keep the best row per protein + cleaned metabolite name
+## ---------------------------------------------------------
+label_df <- plot_df %>%
+  filter(recommended_hit) %>%
+  arrange(
+    desc(endpoint_score),
+    desc(frequency_validated_direction),
+    desc(frequency_train),
+    median_pval_train
+  ) %>%
+  distinct(protein, clean_met, .keep_all = TRUE) %>%
+  slice_head(n = 15)
+
+## ---------------------------------------------------------
+## 6. Plot
+## ---------------------------------------------------------
+
+cor_test <- cor.test(
+  plot_df$mean_estimate_train,
+  plot_df$mean_estimate_test,
+  method = "pearson",
+  use = "complete.obs"
+)
+
+cor_label <- paste0(
+  "Pearson r = ", round(cor_test$estimate, 2),
+  "\nP = ", signif(cor_test$p.value, 2)
+)
+
+p_train_test <- ggplot(
+  plot_df,
+  aes(x = mean_estimate_train, y = mean_estimate_test)
+) +
+  geom_point(
+    aes(color = frequency_validated_direction),
+    size = 2.2,
+    alpha = 0.70
+  ) +
+  geom_point(
+    data = plot_df %>% filter(recommended_hit),
+    shape = 21,
+    fill = "#F1D302",
+    color = "black",
+    stroke = 0.7,
+    size = 3.5
+  ) +
+  geom_smooth(
+    method = "lm",
+    se = FALSE,
+    color = "black",
+    linewidth = 0.4,
+    linetype = "dotted"
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "grey45",
+    linewidth = 0.5
+  ) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    color = "grey45",
+    linewidth = 0.5
+  ) +
+  geom_text_repel(
+    data = label_df,
+    aes(label = hit_label),
+    size = 3.2,
+    color = "black",
+    box.padding = 0.40,
+    point.padding = 0.25,
+    segment.color = "grey50",
+    segment.size = 0.3,
+    min.segment.length = 0,
+    max.overlaps = Inf,
+    seed = 121
+  ) +
+  scale_color_gradientn(
+    colours = c("#2c7fb8", "#7b3294", "#d7191c"),
+    limits = c(0, 1),
+    breaks = c(0, 0.25, 0.50, 0.75, 1.00),
+    labels = number_format(accuracy = 0.01),
+    name = "Freq.\nvalidated"
+  ) +
+  labs(
+    title = "Train vs Test Estimates – Recommended Hits Highlighted",
+    x = "Mean interaction estimate (train)",
+    y = "Mean interaction estimate (test)"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 13),
+    axis.text = element_text(size = 11),
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 10),
+    panel.grid.major = element_line(color = "grey90"),
+    panel.grid.minor = element_line(color = "grey95")
+  )
+
+print(p_train_test)
+
+## ---------------------------------------------------------
+## 7. Save plot
+## ---------------------------------------------------------
+ggsave(
+  filename = file.path(out_dir_main, "train_vs_test_estimates_recommended_hits_clean.pdf"),
+  plot = p_train_test,
+  width = 11,
+  height = 6.5
+)
+
+ggsave(
+  filename = file.path(out_dir_main, "train_vs_test_estimates_recommended_hits_clean.png"),
+  plot = p_train_test,
+  width = 11,
+  height = 6.5,
+  dpi = 300
+)
+
+## ---------------------------------------------------------
+## 8. Save tables
+## ---------------------------------------------------------
+write.table(
+  plot_df,
+  file = file.path(out_dir_main, "train_test_plot_dataframe_clean.txt"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+write.table(
+  label_df,
+  file = file.path(out_dir_main, "train_test_top15_labelled_hits_clean.txt"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+write.table(
+  summary_stats,
+  file = file.path(out_dir_main, "summary_stats.txt"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+write.table(
+  summary_stats_sig,
+  file = file.path(out_dir_main, "summary_stats_sig.txt"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+## ---------------------------------------------------------
+## 9. Optional diagnostics for repeated metabolite names
+## ---------------------------------------------------------
+duplicate_like_labels <- plot_df %>%
+  filter(recommended_hit) %>%
+  count(protein, clean_met, sort = TRUE) %>%
+  filter(n > 1)
+
+write.table(
+  duplicate_like_labels,
+  file = file.path(out_dir_main, "train_test_duplicate_like_labels_diagnostic.txt"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+cat("\nSaved outputs to:\n", out_dir_main, "\n")
+cat("Main plot: train_vs_test_estimates_recommended_hits_clean.pdf/png\n")
+cat("Diagnostic duplicates table: train_test_duplicate_like_labels_diagnostic.txt\n")
+```
+
+```{r}
+############################################################
+## 8. Optional: frequency-validity plot
+############################################################
+
+p_frequency <- ggplot(
+  plot_df,
+  aes(x = frequency_train, y = frequency_validated_direction)
+) +
+  geom_point(
+    aes(color = median_pval_train),
+    size = 2.2,
+    alpha = 0.75
+  ) +
+  geom_point(
+    data = plot_df %>% filter(recommended_hit),
+    shape = 21,
+    fill = "#F1D302",
+    color = "black",
+    stroke = 0.7,
+    size = 3.5
+  ) +
+  geom_text_repel(
+    data = label_df,
+    aes(label = hit_label),
+    size = 3.0,
+    color = "black",
+    box.padding = 0.40,
+    point.padding = 0.25,
+    segment.color = "grey50",
+    segment.size = 0.3,
+    max.overlaps = Inf,
+    seed = 122
+  ) +
+  scale_color_gradientn(
+    colours = c(
+      "#d7191c",  # very low p (strong signal)
+      "#f46d43",
+      "#fdae61",
+      "#abd9e9",
+      "#74add1",
+      "#2c7fb8"   # high p (weak signal)
+    ),
+    values = scales::rescale(c(0, 0.1, 0.25, 0.5, 0.75, 1)),
+    limits = c(0, 1),
+    oob = scales::squish,
+    name = "Median\ntrain p"
+  ) +
+  labs(
+    title = "Stability of PNI × Metabolite Interaction Hits",
+    x = "Frequency significant in training sets",
+    y = "Frequency validated by same direction in test sets"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 13),
+    axis.text = element_text(size = 11),
+    panel.grid.major = element_line(color = "grey90"),
+    panel.grid.minor = element_line(color = "grey95")
+  )
+
+print(p_frequency)
+
+ggsave(
+  filename = file.path(out_dir_main, "frequency_validation_PNI_metabolite_protein_hits_SDgt0.5.pdf"),
+  plot = p_frequency,
+  width = 10,
+  height = 6.5
+)
+
+ggsave(
+  filename = file.path(out_dir_main, "frequency_validation_PNI_metabolite_protein_hits_SDgt0.5.png"),
+  plot = p_frequency,
+  width = 10,
+  height = 6.5,
+  dpi = 300
+)
+
+############################################################
+## 9. Save plotting data
+############################################################
+
+write.table(
+  plot_df,
+  file = file.path(out_dir_main, "train_test_plot_dataframe_SDgt0.5.txt"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+write.table(
+  label_df,
+  file = file.path(out_dir_main, "train_test_top15_labelled_hits_SDgt0.5.txt"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+
+write.table(
+  duplicate_like_labels,
+  file = file.path(out_dir_main, "duplicate_like_labels_diagnostic_SDgt0.5.txt"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+cat("\nSaved visualisation outputs to:\n")
+cat(out_dir_main, "\n")
+```
+
+
+
+```{r}
+# =========================================================
+# Protein vs Metabolite dot plot
+# ONLY POSITIVE interactions
+# Size = strict validated frequency
+# Colour = mean train estimate scaled to [0,1]
+# Ordered so highest strict validated frequency is on the TOP
+# =========================================================
+
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(dplyr)
+  library(stringr)
+  library(scales)
+})
+
+# ---------------------------------------------------------
+# 1. Checks
+# ---------------------------------------------------------
+stopifnot(exists("summary_stats"))
+
+required_cols <- c(
+  "protein",
+  "metabolite",
+  "frequency_validated_direction",
+  "frequency_validated_strict",
+  "mean_estimate_train"
+)
+
+missing_cols <- setdiff(required_cols, colnames(summary_stats))
+if (length(missing_cols) > 0) {
+  stop("summary_stats is missing required columns: ",
+       paste(missing_cols, collapse = ", "))
+}
+
+# ---------------------------------------------------------
+# 2. Output directory
+# ---------------------------------------------------------
+out_dir_dot <- "dotplot_positive_strict_scaled02"
+dir.create(out_dir_dot, recursive = TRUE, showWarnings = FALSE)
+
+# ---------------------------------------------------------
+# 3. Helper functions
+# ---------------------------------------------------------
+extract_metabolite_parts <- function(x) {
+  x <- as.character(x)
+  x <- iconv(x, to = "UTF-8", sub = "")
+  parts <- unlist(strsplit(x, "_", fixed = TRUE))
+
+  if (length(parts) >= 3) {
+    list(
+      name = paste(parts[1:(length(parts) - 2)], collapse = "_"),
+      mass = parts[length(parts) - 1],
+      rt   = parts[length(parts)]
+    )
+  } else {
+    list(
+      name = x,
+      mass = NA_character_,
+      rt   = NA_character_
+    )
+  }
+}
+
+clean_metabolite_name <- function(x) {
+  p <- extract_metabolite_parts(x)
+  nm <- p$name
+  nm <- gsub("^X\\.*", "", nm)
+  nm <- gsub("\\.", " ", nm)
+  nm <- gsub("_", " ", nm)
+  nm <- gsub("\\s+", " ", nm)
+  trimws(nm)
+}
+
+# ---------------------------------------------------------
+# 4. Build plotting table
+#    Keep only positive mean train estimates
+# ---------------------------------------------------------
+plot_df <- summary_stats_sig %>%
+  mutate(
+    protein = as.character(protein),
+    metabolite = as.character(metabolite),
+    metabolite_clean = vapply(metabolite, clean_metabolite_name, character(1)),
+    freq_strict = as.numeric(frequency_validated_strict),
+    freq_direction = as.numeric(frequency_validated_direction),
+    effect_train = as.numeric(mean_estimate_train),
+    effect_abs = abs(effect_train),
+    score = freq_strict * effect_abs
+  ) %>%
+  filter(
+    is.finite(freq_strict),
+    is.finite(freq_direction),
+    is.finite(effect_train),
+    effect_train > 0
+  )
+
+if (nrow(plot_df) == 0) {
+  stop("No positive interactions available after filtering.")
+}
+
+# ---------------------------------------------------------
+# 5. Select top hits
+# ---------------------------------------------------------
+top_n <- 40
+
+top_hits <- plot_df %>%
+  arrange(
+    desc(freq_strict),
+    desc(freq_direction),
+    desc(effect_abs)
+  ) %>%
+  slice_head(n = top_n)
+
+if (nrow(top_hits) == 0) {
+  stop("No top hits available for plotting.")
+}
+
+# ---------------------------------------------------------
+# 6. Scale mean train estimate to [0,1]
+#    This is the ACTUAL scaling step used in the plot
+# ---------------------------------------------------------
+if (length(unique(top_hits$effect_train)) == 1) {
+  top_hits$effect_scaled <- 1
+} else {
+  top_hits$effect_scaled <- scales::rescale(top_hits$effect_train, to = c(0, 1))
+}
+
+# optional check
+print(summary(top_hits$effect_train))
+print(summary(top_hits$effect_scaled))
+print(range(top_hits$effect_scaled, na.rm = TRUE))
+
+# ---------------------------------------------------------
+# 7. Order axes
+#    Protein on Y: highest strict validated frequency at TOP
+#    Metabolite on X: highest strict validated frequency at LEFT
+# ---------------------------------------------------------
+protein_order <- top_hits %>%
+  group_by(protein) %>%
+  summarise(
+    best_freq_strict = max(freq_strict, na.rm = TRUE),
+    best_freq_direction = max(freq_direction, na.rm = TRUE),
+    best_effect = max(effect_train, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(best_freq_strict), desc(best_freq_direction), desc(best_effect)) %>%
+  pull(protein)
+
+met_order <- top_hits %>%
+  group_by(metabolite_clean) %>%
+  summarise(
+    best_freq_strict = max(freq_strict, na.rm = TRUE),
+    best_freq_direction = max(freq_direction, na.rm = TRUE),
+    best_effect = max(effect_train, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(best_freq_strict), desc(best_freq_direction), desc(best_effect)) %>%
+  pull(metabolite_clean)
+
+top_hits <- top_hits %>%
+  mutate(
+    protein = factor(protein, levels = rev(protein_order)),
+    metabolite_clean = factor(metabolite_clean, levels = met_order)
+  )
+
+# ---------------------------------------------------------
+# 8. Plot
+#    Size = strict validated frequency
+#    Colour = scaled mean train estimate [0,1]
+# ---------------------------------------------------------
+p_dot <- ggplot(
+  top_hits,
+  aes(x = metabolite_clean, y = protein)
+) +
+  geom_point(
+    aes(
+      size = freq_strict,
+      colour = effect_scaled
+    ),
+    alpha = 0.9
+  ) +
+  scale_size_continuous(
+    range = c(3, 10),
+    limits = c(0, 1),
+    breaks = c(0.25, 0.50, 0.75, 1.00),
+    labels = number_format(accuracy = 0.01),
+    name = "Strict validated\nfrequency"
+  ) +
+  scale_colour_gradient(
+    low = "white",
+    high = "#d7191c",
+    limits = c(0, 1),
+    breaks = c(0, 0.25, 0.50, 0.75, 1.00),
+    labels = number_format(accuracy = 0.01),
+    name = "Scaled mean\nestimate\n(train)"
+  ) +
+  labs(
+    title = paste0("Top Positive Protein–Metabolite Interactions (n = ", nrow(top_hits), ")"),
+    subtitle = "Positive mean train estimates only; colour scaled from 0 to 1",
+    x = "Metabolite",
+    y = "Protein"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.title = element_text(size = 13),
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+    axis.text.y = element_text(size = 10),
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 10),
+    panel.grid.major = element_line(color = "grey90"),
+    panel.grid.minor = element_blank()
+  )
+
+print(p_dot)
+
+# ---------------------------------------------------------
+# 9. Save outputs
+# ---------------------------------------------------------
+ggsave(
+  filename = file.path(out_dir_dot, "dotplot_positive_strict_scaled01.pdf"),
+  plot = p_dot,
+  width = 12,
+  height = 7
+)
+
+ggsave(
+  filename = file.path(out_dir_dot, "dotplot_positive_strict_scaled01.png"),
+  plot = p_dot,
+  width = 12,
+  height = 7,
+  dpi = 300
+)
+
+write.table(
+  top_hits,
+  file = file.path(out_dir_dot, "positive_hits_table_scaled01.txt"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+cat("\nSaved to:\n", out_dir_dot, "\n")
+cat("Main plot: dotplot_positive_strict_scaled01.pdf/png\n")
+cat("Table: positive_hits_table_scaled01.txt\n")
+```
+
+```{r}
+# =========================================================
+# Heatmap + dot overlay for protein–metabolite interactions
+# Fill  = scaled mean estimate from train [0,1]
+# Dot size = strict validated frequency
+# Dot colour = validated direction frequency
+# Positive mean train estimates only
+# =========================================================
+
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(dplyr)
+  library(stringr)
+  library(scales)
+})
+
+# ---------------------------------------------------------
+# 1. Checks
+# ---------------------------------------------------------
+stopifnot(exists("summary_stats"))
+
+required_cols <- c(
+  "protein",
+  "metabolite",
+  "frequency_validated_direction",
+  "frequency_validated_strict",
+  "mean_estimate_train"
+)
+
+missing_cols <- setdiff(required_cols, colnames(summary_stats))
+if (length(missing_cols) > 0) {
+  stop("summary_stats is missing required columns: ",
+       paste(missing_cols, collapse = ", "))
+}
+
+# ---------------------------------------------------------
+# 2. Output directory
+# ---------------------------------------------------------
+out_dir_heat <- "dotplot_positive_strict_scaled02"
+dir.create(out_dir_heat, recursive = TRUE, showWarnings = FALSE)
+
+# ---------------------------------------------------------
+# 3. Helper functions
+# ---------------------------------------------------------
+extract_metabolite_parts <- function(x) {
+  x <- as.character(x)
+  x <- iconv(x, to = "UTF-8", sub = "")
+  parts <- unlist(strsplit(x, "_", fixed = TRUE))
+
+  if (length(parts) >= 3) {
+    list(
+      name = paste(parts[1:(length(parts) - 2)], collapse = "_"),
+      mass = parts[length(parts) - 1],
+      rt   = parts[length(parts)]
+    )
+  } else {
+    list(
+      name = x,
+      mass = NA_character_,
+      rt   = NA_character_
+    )
+  }
+}
+
+clean_metabolite_name <- function(x) {
+  p <- extract_metabolite_parts(x)
+  nm <- p$name
+  nm <- gsub("^X\\.*", "", nm)
+  nm <- gsub("\\.", " ", nm)
+  nm <- gsub("_", " ", nm)
+  nm <- gsub("\\s+", " ", nm)
+  trimws(nm)
+}
+
+# ---------------------------------------------------------
+# 4. Build plotting table
+# ---------------------------------------------------------
+plot_df <- summary_stats_sig %>%
+  mutate(
+    protein = as.character(protein),
+    metabolite = as.character(metabolite),
+    metabolite_clean = vapply(metabolite, clean_metabolite_name, character(1)),
+    freq_direction = as.numeric(frequency_validated_direction),
+    freq_strict = as.numeric(frequency_validated_strict),
+    effect_train = as.numeric(mean_estimate_train)
+  ) %>%
+  filter(
+    is.finite(freq_direction),
+    is.finite(freq_strict),
+    is.finite(effect_train),
+    effect_train > 0
+  )
+
+if (nrow(plot_df) == 0) {
+  stop("No positive interactions available after filtering.")
+}
+
+# ---------------------------------------------------------
+# 5. Choose top hits
+#    Main ranking:
+#    1) strict validated frequency
+#    2) validated direction frequency
+#    3) mean train estimate
+# ---------------------------------------------------------
+top_n <- 40
+
+top_hits <- plot_df %>%
+  arrange(
+    desc(freq_strict),
+    desc(freq_direction),
+    desc(effect_train)
+  ) %>%
+  slice_head(n = top_n)
+
+if (nrow(top_hits) == 0) {
+  stop("No top hits available for plotting.")
+}
+
+# ---------------------------------------------------------
+# 6. Scale mean train estimate to [0,1]
+#    Done within top_hits for visual contrast
+# ---------------------------------------------------------
+if (length(unique(top_hits$effect_train)) == 1) {
+  top_hits$effect_scaled <- 1
+} else {
+  top_hits$effect_scaled <- scales::rescale(top_hits$effect_train, to = c(0, 1))
+}
+
+print(summary(top_hits$effect_train))
+print(summary(top_hits$effect_scaled))
+print(range(top_hits$effect_scaled, na.rm = TRUE))
+
+# ---------------------------------------------------------
+# 7. Order axes
+#    Highest strict validated frequency at top/left
+# ---------------------------------------------------------
+protein_order <- top_hits %>%
+  group_by(protein) %>%
+  summarise(
+    best_freq_strict = max(freq_strict, na.rm = TRUE),
+    best_freq_direction = max(freq_direction, na.rm = TRUE),
+    best_effect = max(effect_train, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(
+    desc(best_freq_strict),
+    desc(best_freq_direction),
+    desc(best_effect)
+  ) %>%
+  pull(protein)
+
+met_order <- top_hits %>%
+  group_by(metabolite_clean) %>%
+  summarise(
+    best_freq_strict = max(freq_strict, na.rm = TRUE),
+    best_freq_direction = max(freq_direction, na.rm = TRUE),
+    best_effect = max(effect_train, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(
+    desc(best_freq_strict),
+    desc(best_freq_direction),
+    desc(best_effect)
+  ) %>%
+  pull(metabolite_clean)
+
+top_hits <- top_hits %>%
+  mutate(
+    protein = factor(protein, levels = rev(protein_order)),
+    metabolite_clean = factor(metabolite_clean, levels = met_order)
+  )
+
+# ---------------------------------------------------------
+# 8. Heatmap with dot overlay
+#    Tile fill  = scaled mean estimate from train
+#    Dot size   = strict validated frequency
+#    Dot colour = validated direction frequency
+# ---------------------------------------------------------
+p_heat <- ggplot(
+  top_hits,
+  aes(x = metabolite_clean, y = protein)
+) +
+  geom_tile(
+    aes(fill = effect_scaled),
+    colour = "grey85",
+    linewidth = 0.3
+  ) +
+  geom_point(
+    aes(
+      size = freq_strict,
+      colour = freq_direction
+    ),
+    alpha = 0.95
+  ) +
+  scale_fill_gradient(
+    low = "white",
+    high = "#d7191c",
+    limits = c(0, 1),
+    breaks = c(0, 0.25, 0.50, 0.75, 1.00),
+    labels = number_format(accuracy = 0.01),
+    name = "Scaled mean\nestimate\n(train)"
+  ) +
+  scale_size_continuous(
+    range = c(2, 10),
+    limits = c(0, 1),
+    breaks = c(0.25, 0.50, 0.75, 1.00),
+    labels = number_format(accuracy = 0.01),
+    name = "Strict validated\nfrequency"
+  ) +
+  scale_colour_gradient(
+    low = "#bdd7e7",
+    high = "#08519c",
+    limits = c(0, 1),
+    breaks = c(0.25, 0.50, 0.75, 1.00),
+    labels = number_format(accuracy = 0.01),
+    name = "Validated direction\nfrequency"
+  ) +
+  labs(
+    title = paste0("Top Positive Protein–Metabolite Interactions (n = ", nrow(top_hits), ")"),
+    subtitle = "Tile fill = scaled mean train estimate; dot size = strict frequency; dot colour = direction frequency",
+    x = "Metabolite",
+    y = "Protein"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.title = element_text(size = 13),
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+    axis.text.y = element_text(size = 10),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9),
+    panel.grid = element_blank()
+  )
+
+print(p_heat)
+
+# ---------------------------------------------------------
+# 9. Save outputs
+# ---------------------------------------------------------
+ggsave(
+  filename = file.path(out_dir_heat, "heatmap_dotoverlay_strict_direction_trainscaled.pdf"),
+  plot = p_heat,
+  width = 13,
+  height = 8
+)
+
+ggsave(
+  filename = file.path(out_dir_heat, "heatmap_dotoverlay_strict_direction_trainscaled.png"),
+  plot = p_heat,
+  width = 13,
+  height = 8,
+  dpi = 300
+)
+
+write.table(
+  top_hits,
+  file = file.path(out_dir_heat, "heatmap_dotoverlay_top_hits_table.txt"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+cat("\nSaved to:\n", out_dir_heat, "\n")
+cat("Main plot: heatmap_dotoverlay_strict_direction_trainscaled.pdf/png\n")
+cat("Table: heatmap_dotoverlay_top_hits_table.txt\n")
+```
+

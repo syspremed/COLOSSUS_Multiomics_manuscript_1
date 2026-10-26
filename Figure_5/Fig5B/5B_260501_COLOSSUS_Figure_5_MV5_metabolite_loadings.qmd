@@ -1,0 +1,229 @@
+---
+title: "Figure 5B – MV5 metabolite loadings"
+author: "Adrian Larkeryd; Sadanandam Lab, Institute of Cancer Research, London"
+date: "May 2026"
+format: 
+  html:
+    page-layout: full
+    embed-resources: true
+    toc: true
+    toc-depth: 5
+    toc-expand: 5
+  pdf:
+    toc: true
+    toc-depth: 5
+fig-width: 6
+fig-height: 4
+fig-caption: true
+cache: true
+editor: source
+prefer-html: true
+---
+
+<!--
+================================================================================
+  Figure Panel  : 5B
+  Description   : Bar plot of known metabolites across scaled MV5 loadings from the iPhenMap
+                  analysis (Figure 4B).
+  Input data    : MV_clustering.txt
+                  Fig5_20200526-colossus_data_prognosis_calculated_Gift.txt
+                  scaledLoadingsCoefficients.txt
+                  scaledRegressionCoefficients.txt
+  Output        : 5B_20260501_MV2_MV6_sig_known_metabolite_loading_bar_plot.pdf
+  R packages    : ggplot2, gridExtra, tidyverse, wesanderson, ggpubr, dplyr, purrr, future.apply, furrr, tibble, RColorBrewer
+  Authors       : Sadanandam Lab, Institute of Cancer Research, London
+  Contact       : anguraj.sadanandam@icr.ac.uk
+  Note          : Original analysis by Adrian Larkeryd. Some output file names in the code keep draft (pre-publication) labels, e.g. MV2/MV6 for MV5.
+================================================================================
+-->
+
+# Library
+
+```{r library}
+
+library(ggplot2)
+library(gridExtra)
+library(tidyverse)
+library(wesanderson)
+library(ggpubr)
+library(dplyr)
+library(purrr)
+library(future.apply)
+library(furrr)
+library(tibble)
+```
+
+
+# Colours
+
+```{r colours}
+
+colour_mutation_type = c("Missense_Mutation" = "#80b1d3", 
+                         "Nonsense_Mutation" = "#ffffb3", 
+                         "In_Frame_Del" = "#bebada", 
+                         "In_Frame_Ins" = "#fb8072", 
+                         "Frame_Shift_Del" = "#8dd3c7", 
+                         "Frame_Shift_Ins" = "#fdb462", 
+                         "Splice_Site" = "#b3de69", 
+                         "Multi_Hit" = "#fccde5")
+
+vc_cols = RColorBrewer::brewer.pal(n = 8, name = 'Paired')
+names(vc_cols) = c(
+  'Frame_Shift_Del',
+  'Missense_Mutation',
+  'Nonsense_Mutation',
+  'Multi_Hit',
+  'Frame_Shift_Ins',
+  'In_Frame_Ins',
+  'Splice_Site',
+  'In_Frame_Del'
+)
+
+vc_cols_v2 = c("Frame_Shift_Del" = "#A6CEE3", 
+               "Missense_Mutation" = "#1F78B4", 
+               "Nonsense_Mutation" = "#B2DF8A", 
+               "Multi_Hit" = "#333333", 
+               "Frame_Shift_Ins" = "#E31A1C", 
+               "In_Frame_Ins" = "#FB9A99", 
+               "Splice_Site" = "#FDBF6F", 
+               "In_Frame_Del" = "#FF7F00") 
+
+colour_wes_darjeeling1_n5 = wes_palette("Darjeeling1", 5, type = "discrete")
+colour_wes_chevalier1_2 = wes_palette("Chevalier1", 2)
+colour_wes_asteroidcity1_5 = wes_palette("AsteroidCity1")
+colour_dataset_cat = c("COLOSSUS" = colour_wes_asteroidcity1_5[1], "TCGA MSS RAS" = colour_wes_asteroidcity1_5[2], "TCGA MSS RAS-WT" = colour_wes_asteroidcity1_5[4])
+
+publication_theme = theme(
+  title = element_text(size = 20),
+  axis.title.x = element_text(size = 16),
+  axis.text.x = element_text(size = 14),
+  axis.title.y = element_text(size = 16),
+  axis.text.y = element_text(size = 14)
+)
+
+```
+
+
+# Fig 5 prep
+
+```{r fig5-prep}
+
+MV_scores = read.table("MV_clustering.txt", sep = "\t", header = T)
+
+MV_scores[,2:7] <- -1 * (MV_scores[,2:7])
+
+# mutation_matrix = read.table("../data/Fig5_COLOSSUS_onco_matrix_CGGtier1and2_100genes.txt", sep = "\t", header = T)
+# 
+# mutation_matrix[mutation_matrix!=""] = 1
+# mutation_matrix[mutation_matrix==""] = 0
+# 
+# colossus_id_conversion_table = read.table("../data/Fig5_colossus_88_ras_confirmed_from_wes_withID.tsv", sep = "\t", header = T)
+# MV_scores$samples = str_replace_all(MV_scores$samples, "\\.", "-")
+# 
+# MV_scores_with_idconversion = merge(MV_scores, colossus_id_conversion_table, by.x="samples", by.y="COLOSSUS_ID")
+
+MV2v6_scores = MV_scores[, c("samples", "MV5")]
+
+MV2v6_scores$samples = str_replace_all(MV2v6_scores$samples, "\\.", "-")
+
+MV2v6_clinical_all = read.table("Fig5_20200526-colossus_data_prognosis_calculated_Gift.txt", sep = "\t", header = T)
+MV2v6_clinical_all = MV2v6_clinical_all[, c("COLOSSUS_ID", "perineural_invasion")]
+
+rownames(MV2v6_clinical_all) = MV2v6_clinical_all$COLOSSUS_ID
+MV2v6_clinical = MV2v6_clinical_all[MV2v6_scores$samples, ]
+
+MV2v6_scores_clinical = merge(MV2v6_scores, MV2v6_clinical, by.x="samples", by.y="COLOSSUS_ID")
+
+MV2v6_loadings = read.table("scaledLoadingsCoefficients.txt", sep = "\t", header = T)
+
+MV2v6_loadings[,-1] <- -1 *(MV2v6_loadings[,-1])
+MV2v6_loadings$Feature = rownames(MV2v6_loadings)
+MV2v6_loadings = MV2v6_loadings[, c("Feature", "MV5")]
+
+MV2v6_loadings = MV2v6_loadings[!is.na(MV2v6_loadings$MV5),]
+
+MV2v6_phenotype = read.table("scaledRegressionCoefficients.txt", sep = "\t", header = T)
+MV2v6_phenotype$clinical_category = rownames(MV2v6_phenotype)
+
+MV2v6_phenotype[,-7] <- -1 *(MV2v6_phenotype[,-7])
+
+```
+
+# Fig 5B
+
+```{r fig5b-alternative}
+#| fig-width: 8
+#| fig-height: 9
+
+MV2v6_loadings_unknown = MV2v6_loadings[grepl("^unknown", MV2v6_loadings$Feature),]
+
+MV2v6_loadings_known = MV2v6_loadings[!grepl("^unknown", MV2v6_loadings$Feature),]
+MV2v6_loadings_known_sig = MV2v6_loadings_known[MV2v6_loadings_known$MV5 > 2 |
+                                                MV2v6_loadings_known$MV5 < (-2), ]
+MV2v6_loadings_known_nonsig = MV2v6_loadings_known[!(MV2v6_loadings_known$MV5 > 2 |
+                                                  MV2v6_loadings_known$MV5 < (-2)), ]
+
+MV2v6_loadings_labels = MV2v6_loadings[!grepl("^unknown", MV2v6_loadings$Feature) &
+                                        (abs(MV2v6_loadings$MV5) > 2),]
+
+
+#MV2v6_loadings_labels$Feature =  gsub("_\\d+.*", "", MV2v6_loadings_labels$Feature)
+
+
+#MV2v6_loadings_labels_long = pivot_longer(MV2v6_loadings_labels, cols = 2:3, names_to = "MV", values_to = "Loading")
+#MV2v6_loadings_labels_long = MV2v6_loadings_labels_long[order(MV2v6_loadings_labels_long$Loading),]
+#MV2v6_loadings_labels_long$Feature = factor(MV2v6_loadings_labels_long$Feature, levels = unique(MV2v6_loadings_labels_long$Feature))
+
+
+#p1=ggplot(MV2v6_loadings_labels_long, aes(x = Feature, y = Loading))+
+#  geom_bar(stat="identity", fill=colour_wes_darjeeling1_n5[2])+
+#  geom_hline(yintercept = c((-3), 3), lty=2, col="#DD3333")+
+ # facet_grid(rows=vars(MV), scales="free_y")+
+ # scale_x_discrete(guide = guide_axis(angle=90))+
+ # theme_bw()+
+ # publication_theme
+
+
+```
+
+```{r}
+# corrected version Anguraj
+MV2v6_loadings_labels$Feature_label <- gsub("_\\d+.*", "", MV2v6_loadings_labels$Feature)
+MV2v6_loadings_labels$Feature_unique <- make.unique(MV2v6_loadings_labels$Feature_label)
+
+MV2v6_loadings_labels <- MV2v6_loadings_labels[order(MV2v6_loadings_labels$MV5), ]
+
+MV2v6_loadings_labels$Feature_unique <- factor(
+  MV2v6_loadings_labels$Feature_unique,
+  levels = MV2v6_loadings_labels$Feature_unique
+)
+MV2v6_loadings_labels$Feature_label <- gsub("_\\d+.*", "", MV2v6_loadings_labels$Feature)
+MV2v6_loadings_labels$Feature_label <- gsub(
+  "^X2\\.\\.\\.2S\\.4aR\\.8aS\\.\\.2\\.Hydroxy\\.4a\\.methyl\\.8\\.methylenedecahydro\\.2\\.naphthalenyl\\.acrylic_acid$",
+  "HMMNA",
+  MV2v6_loadings_labels$Feature_label
+)
+
+MV2v6_loadings_labels_long <- pivot_longer(
+  MV2v6_loadings_labels,
+  cols = c(MV5),
+  names_to = "MV",
+  values_to = "Loading"
+)
+
+p1 <- ggplot(MV2v6_loadings_labels_long,
+             aes(x = Feature_unique, y = Loading)) +
+  geom_col(fill = colour_wes_darjeeling1_n5[2]) +
+  geom_hline(yintercept = c(-2, 2), lty = 2, col = "#DD3333") +
+  facet_grid(rows = vars(MV), scales = "free_y") +
+  scale_x_discrete(labels = MV2v6_loadings_labels$Feature_label) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  publication_theme
+
+print(p1)
+
+ggsave("5B_20260501_MV2_MV6_sig_known_metabolite_loading_bar_plot.pdf", p1, width = 5, height = 11)
+
+```
+
