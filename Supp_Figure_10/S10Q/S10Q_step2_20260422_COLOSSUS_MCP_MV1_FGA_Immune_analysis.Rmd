@@ -1,0 +1,163 @@
+---
+title: "Supplementary Figure S10Q – MV1 / FGA vs MCP-counter immune scores (COLOSSUS St2/3)"
+author: "Sadanandam Lab, Institute of Cancer Research, London"
+date: "April 2026"
+output: html_notebook
+---
+
+<!--
+================================================================================
+  Figure Panel  : Supp S10Q (step 2)
+  Description   : Correlation of MV1 (n = 98) and FGA (n = 134) with MCP-counter immune scores.
+  Input data    : MV_clustering.txt
+                  4L_20260422_COLOSSUS_st2_3_MCPCounter_immune_1M_134_samples.txt
+                  20240526_CINmetrics_COLOSSUS_output_with_COLOSSUS_ID.txt
+  Output        : 20250515_COLOSSUS_MV1_FGA_MCP_counter_barplot_combined_results.txt
+                  4L_20260422_cell types_COLOSSUS_MV1_FGA_MCP_counter_barplot_combined.pdf
+  R packages    : tidyverse, ggpubr, dplyr
+  Authors       : Sadanandam Lab, Institute of Cancer Research, London
+  Contact       : anguraj.sadanandam@icr.ac.uk
+  Note          : Uses MCP-counter scores from step 1 and MV scores from iPhenMap. Some output file names in the code keep draft (pre-publication) panel labels.
+================================================================================
+-->
+
+```{r}
+# reading MVs
+
+mv <- read.delim("MV_clustering.txt", stringsAsFactors = FALSE)
+
+mv <- cbind(mv$samples, (-1)*mv[,-1])
+colnames(mv)[1] <- "samples"
+
+dim(mv)
+```
+
+
+```{r}
+# MCP data analysis with MVs
+
+mcp <- read.delim("4L_20260422_COLOSSUS_st2_3_MCPCounter_immune_1M_134_samples.txt",stringsAsFactors = FALSE)
+mcp <- t(mcp)
+mcp <- cbind(rownames(mcp),data.matrix(mcp))
+colnames(mcp)[1] <- "Sample"
+dim(mcp)
+
+# Ensure it's a data.frame
+mcp <- as.data.frame(mcp, stringsAsFactors = FALSE)
+
+# Convert all columns except Sample to numeric
+mcp[ , setdiff(colnames(mcp), "Sample")] <-
+  lapply(mcp[ , setdiff(colnames(mcp), "Sample")], as.numeric)
+
+# Check
+str(mcp)
+head(mcp[,1:5])
+```
+
+
+```{r}
+# Load libraries
+library(tidyverse)
+library(ggpubr)
+
+# ---- STEP 1: Load and clean FGA data ----
+fga <- read.delim("20240526_CINmetrics_COLOSSUS_output_with_COLOSSUS_ID.txt", stringsAsFactors = FALSE)
+
+# Rename sample ID column and standardize format
+fga <- fga %>%
+  dplyr::rename(Sample = id.ID.GENERATOR) %>%
+  dplyr::mutate(Sample = gsub("-", ".", Sample))
+
+# ---- STEP 2: Clean MV1 and MCP ----
+# mv (MV score matrix) is read in the first chunk
+mv1_df <- mv %>%
+ dplyr:: rename(Sample = samples) %>%
+  dplyr::select(Sample, MV1) %>%
+ dplyr:: mutate(Sample = gsub("-", ".", Sample))
+
+# Rename first column of MCP to 'Sample'
+mcp <- mcp %>%
+  dplyr::rename(Sample = 1)
+
+# ---- STEP 3: Merge datasets ----
+df_fga_mcp <- inner_join(fga, mcp, by = "Sample")
+df_mv1_mcp <- inner_join(mv1_df, mcp, by = "Sample")
+
+# ---- STEP 4: Correlation function ----
+get_cor_results <- function(df, y_col, exclude = NULL) {
+  cols_to_test <- names(df)[!(names(df) %in% c("Sample", y_col, exclude))]
+  map_dfr(cols_to_test, function(var) {
+    x <- df[[var]]
+    y <- df[[y_col]]
+    if (sum(is.finite(x)) > 2 && sd(x, na.rm = TRUE) > 0) {
+      test <- cor.test(x, y, method = "pearson")
+      tibble(
+        feature = var,
+        correlation = test$estimate,
+        p_value = test$p.value
+      )
+    } else {
+      tibble(feature = var, correlation = NA_real_, p_value = NA_real_)
+    }
+  })
+}
+
+# ---- STEP 5: Compute correlations ----
+results_fga <- get_cor_results(df_fga_mcp, "fga", exclude = c("tai", "cna", "base_segments", "break_points")) %>%
+  mutate(metric = "FGA")
+
+results_mv1 <- get_cor_results(df_mv1_mcp, "MV1") %>%
+  mutate(metric = "MV1")
+
+# ---- STEP 6: Combine results and format ----
+combined_results <- bind_rows(results_fga, results_mv1) %>%
+  filter(!is.na(correlation)) %>%
+  mutate(
+    significant = ifelse(p_value < 0.05, "Significant", "Not significant"),
+    group = interaction(metric, significant),
+    feature = fct_reorder(feature, correlation)
+  )
+
+#write.table(combined_results,"20250515_COLOSSUS_MV1_FGA_MCP_counter_barplot_combined_results.txt", sep ="\t", quote = FALSE, row.names = FALSE)
+
+# ---- STEP 7: Plot (No r/p labels) ----
+
+#pdf("4L_20260422_cell types_COLOSSUS_MV1_FGA_MCP_counter_barplot_combined.pdf")
+
+ggplot(combined_results, aes(x = correlation, y = feature, fill = group)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_fill_manual(
+    values = c(
+      "FGA.Significant" = "#1f77b4",
+      "FGA.Not significant" = "#aec7e8",
+      "MV1.Significant" = "#ff7f0e",
+      "MV1.Not significant" = "#ffbb78"
+    ),
+    labels = c(
+      "FGA.Significant" = "FGA (p < 0.05)",
+      "FGA.Not significant" = "FGA (n.s.)",
+      "MV1.Significant" = "MV1 (p < 0.05)",
+      "MV1.Not significant" = "MV1 (n.s.)"
+    )
+  ) +
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Correlation of MCP Cell Types with FGA and MV1",
+    x = "Pearson Correlation Coefficient",
+    y = "MCP Cell Type",
+    fill = "Metric + Significance"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    axis.text.y = element_text(size = 10),
+    legend.position = "top"
+  ) +
+  coord_cartesian(xlim = c(min(combined_results$correlation) - 0.2,
+                           max(combined_results$correlation) + 0.2))
+dev.off()
+```
+
+
+
+
+
