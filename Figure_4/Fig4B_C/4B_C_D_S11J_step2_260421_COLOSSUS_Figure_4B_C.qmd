@@ -1,0 +1,466 @@
+---
+title: "Figure 4B-D and Supplementary Figure S11J – iPhenMap MV plot, MV1 loadings and enrichment"
+author: "Adrian Larkeryd; Sadanandam Lab, Institute of Cancer Research, London"
+date: "April 2026"
+format: 
+  html:
+    page-layout: full
+    embed-resources: true
+    toc: true
+    toc-depth: 5
+    toc-expand: 5
+  pdf:
+    toc: true
+    toc-depth: 5
+fig-width: 6
+fig-height: 4
+fig-caption: true
+cache: true
+editor: source
+prefer-html: true
+---
+
+<!--
+================================================================================
+  Figure Panel  : 4B, 4C, 4D; Supp S11J
+  Description   : 4B iPhenMap MV plot (proportion of variance, multiomics loadings, clinical
+                  associations); 4C MV1 feature loadings; 4D hypeR enrichment of MV1-positive
+                  loadings; S11J hypeR enrichment of MV1-negative loadings.
+  Input data    : scaledRegressionCoefficients.txt
+                  PoV.txt
+  Output        : 4B_iPhenMap_heatmap_pov_clinical_multiomics.pdf
+                  4C_iPhenMap_multiomics_features_loadings.pdf
+                  scaledLoadingsCoefficients.txt
+                  4D_hypeR_MV1_positive_dotplot.pdf
+                  S10I_hypeR_MV1_negative_dotplot.pdf
+                  20240723_COLOSSUS_MV1_pos_genes_HBKR_hyperR.pdf
+                  20240723_COLOSSUS_MV1_neg_genes_HBKR_hyperR.pdf
+  R packages    : ggplot2, tidyverse, gridExtra, stringr, wesanderson, ComplexHeatmap, qusage, hypeR, msigdbr, dplyr, RColorBrewer, circlize, ggrepel
+  Authors       : Sadanandam Lab, Institute of Cancer Research, London
+  Contact       : anguraj.sadanandam@icr.ac.uk
+  Note          : Step 2 of Fig4B_C; reads the iPhenMap outputs of step 1. Original analysis by Adrian Larkeryd.
+================================================================================
+-->
+
+# Library
+
+```{r library}
+
+library(ggplot2)
+library(tidyverse)
+library(gridExtra)
+library(stringr)
+library(wesanderson)
+library(ComplexHeatmap)
+
+```
+
+# Colours
+
+```{r colours}
+
+colour_mutation_type = c("Missense_Mutation" = "#80b1d3", 
+                         "Nonsense_Mutation" = "#ffffb3", 
+                         "In_Frame_Del" = "#bebada", 
+                         "In_Frame_Ins" = "#fb8072", 
+                         "Frame_Shift_Del" = "#8dd3c7", 
+                         "Frame_Shift_Ins" = "#fdb462", 
+                         "Splice_Site" = "#b3de69", 
+                         "Multi_Hit" = "#fccde5")
+
+vc_cols = RColorBrewer::brewer.pal(n = 8, name = 'Paired')
+names(vc_cols) = c(
+  'Frame_Shift_Del',
+  'Missense_Mutation',
+  'Nonsense_Mutation',
+  'Multi_Hit',
+  'Frame_Shift_Ins',
+  'In_Frame_Ins',
+  'Splice_Site',
+  'In_Frame_Del'
+)
+
+vc_cols_v2 = c("Frame_Shift_Del" = "#A6CEE3", 
+               "Missense_Mutation" = "#1F78B4", 
+               "Nonsense_Mutation" = "#B2DF8A", 
+               "Multi_Hit" = "#333333", 
+               "Frame_Shift_Ins" = "#E31A1C", 
+               "In_Frame_Ins" = "#FB9A99", 
+               "Splice_Site" = "#FDBF6F", 
+               "In_Frame_Del" = "#FF7F00") 
+
+colour_wes_darjeeling1_n5 = wes_palette("Darjeeling1", 5, type = "discrete")
+colour_wes_chevalier1_2 = wes_palette("Chevalier1", 2)
+colour_wes_asteroidcity1_5 = wes_palette("AsteroidCity1")
+colour_dataset_cat = c("COLOSSUS" = colour_wes_asteroidcity1_5[1], "TCGA MSS RAS" = colour_wes_asteroidcity1_5[2], "TCGA MSS RAS-WT" = colour_wes_asteroidcity1_5[4])
+
+publication_theme = theme(
+  title = element_text(size = 20),
+  axis.title.x = element_text(size = 16),
+  axis.text.x = element_text(size = 14),
+  axis.title.y = element_text(size = 16),
+  axis.text.y = element_text(size = 14)
+)
+
+```
+
+# Fig 4B
+
+```{r fig4a, }
+
+clinical_vs_MV = read.table("scaledRegressionCoefficients.txt", sep = "\t", header = T)
+
+# ROTATED - Anguraj
+clinical_vs_MV_forplot = -1*(clinical_vs_MV)
+clinical_vs_MV_forplot[abs(clinical_vs_MV_forplot)<1.96] = 0
+
+pdf("4B_iPhenMap_heatmap_pov_clinical_multiomics.pdf")
+p_mv_vs_clinical = Heatmap(
+  clinical_vs_MV_forplot,name="Effect",
+  cluster_columns = FALSE,
+  cluster_rows = FALSE,rect_gp = gpar(col= "black",lwd=1.5),
+  row_names_side = "left", row_names_gp = gpar(fontsize = 11),
+  column_names_gp = gpar(fontsize = 17),
+  show_row_dend = TRUE,  show_column_dend = FALSE,
+  col = circlize::colorRamp2(c(-3, -1.96, -1.95, 1.95, 1.96, 3), c("#446455", "#A4C4A5", "#FFFFFF", "#FFFFFF", "#FDF2D2", "#FDD262")),
+  heatmap_legend_param=list(color_bar = "continuous",at=seq(-3,3, by=1))
+)
+p_mv_vs_clinical
+
+activated_mvs_df = rbind(c(1,0,0,1,0,0), c(1,0,0,0,0,0), c(0,1,1,0,1,1), c(0,0,0,1,0,0))
+colnames(activated_mvs_df) = c("MV1", "MV2", "MV3", "MV4", "MV5", "MV6")
+rownames(activated_mvs_df) = c("RNA", "Protein", "Metabolites", "CNA")
+
+p_activated_mvs = Heatmap(
+  activated_mvs_df,name="Effect",
+  cluster_columns = FALSE,
+  cluster_rows = FALSE,rect_gp = gpar(col= "black",lwd=1.5),
+  row_names_side = "left", row_names_gp = gpar(fontsize = 11),
+  column_names_gp = gpar(fontsize = 17),
+  show_row_dend = TRUE,  show_column_dend = FALSE,
+  col = circlize::colorRamp2(c(0, 1), c("#FFFFFF", "#446455"))
+)
+p_activated_mvs
+
+mv_pov = read.table("PoV.txt")
+
+ggplot(mv_pov, aes(x=MV, y=PoV, col=Type, group=Type))+
+  geom_line(lwd=1.5)+
+  geom_point(size=3)+
+  scale_color_manual(values=colour_wes_darjeeling1_n5)+
+  theme_bw()
+
+dev.off()
+
+```
+
+# Fig 4C
+
+```{r fig4b, fig.dim=c(9,5)}
+
+pdf("4C_iPhenMap_multiomics_features_loadings.pdf")
+loadings = read.table("scaledLoadingsCoefficients.txt", sep = "\t", header = T)
+
+# ROTATED - Anguraj
+loadings_mv1 = bind_cols(rownames(loadings), (-1)*(loadings[,1]))
+names(loadings_mv1) = c("Feature", "Loading")
+loadings_mv1 = loadings_mv1[!is.na(loadings_mv1$Loading),]
+loadings_mv1$Feature = factor(loadings_mv1$Feature, levels = loadings_mv1$Feature)
+loadings_mv1$Feature_type = ifelse (grepl("_", loadings_mv1$Feature), "Protein", "RNA")
+
+p_protein = ggplot(loadings_mv1[loadings_mv1$Feature_type=="Protein",], aes(x=Feature, y=Loading, col = Loading>0, label=Feature))+
+  geom_bar(stat="identity", show.legend = F)+
+  ggrepel::geom_text_repel(position = "identity", max.overlaps = 20, show.legend = F)+
+  facet_grid(~Feature_type, scales = "free_x", space = "free_x")+
+  scale_color_manual(values = wes_palette("Cavalcanti1"))+
+  scale_y_continuous(limits=c(-15,5))+
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.title.y = element_blank())
+p_rna = ggplot(loadings_mv1[loadings_mv1$Feature_type=="RNA",], aes(x=Feature, y=Loading, col = Loading>0, label=Feature))+
+  geom_bar(stat="identity", show.legend = F)+
+  ggrepel::geom_text_repel(position = "identity", max.overlaps = 10, show.legend = F)+
+  facet_grid(~Feature_type, scales = "free_x", space = "free_x")+
+  scale_color_manual(values = wes_palette("Cavalcanti1"))+
+  scale_y_continuous(limits=c(-15,5))+
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+grid.arrange(p_rna, p_protein, widths=c(576,230))
+
+dev.off()
+```
+
+
+# Fig 4D
+
+```{r fig4c }
+
+# reading scaled loadings
+mv_loadings <- read.delim("scaledLoadingsCoefficients.txt", stringsAsFactors = FALSE)
+dim(mv_loadings)
+
+# remove those loadings with NA for MV1
+na_mv1 <- which(!is.na(mv_loadings$MV1))
+length(na_mv1)
+
+# Consider MV1 loadings <=-3 and >=3
+mv1_pos <- which(mv_loadings$MV1[na_mv1] >= 2)
+mv1_neg <- which(mv_loadings$MV1[na_mv1] <= -2)
+length(mv1_pos)
+length(mv1_neg)
+
+mv1 <- c(mv1_pos,mv1_neg)
+length(mv1)
+
+mv_loadings_mv1 <- mv_loadings$MV1[mv1]
+names(mv_loadings_mv1) <- rownames(mv_loadings)[mv1]
+length(mv_loadings_mv1)
+
+#parse the protein names - MV1 contains both genes and proteins
+w_protein <- which(grepl("_",names(mv_loadings_mv1)) == TRUE)
+length(w_protein)
+
+protein <- NULL
+for(i in 1:length(w_protein)){
+protein[i] <- unlist(strsplit(names(mv_loadings_mv1[w_protein[i]]),"_"))[2]
+}
+
+w_protein_NA <- which(protein == "")
+
+for(i in 1:length(w_protein_NA)){
+protein[w_protein_NA[i]] <- unlist(strsplit(rownames(mv_loadings)[mv1[w_protein[w_protein_NA[i]]]],"_"))[4]
+}
+
+names(mv_loadings_mv1)[w_protein] <- protein
+
+#selecting only positive MV1
+mv_loadings_mv1_pos <- mv_loadings_mv1[which(mv_loadings_mv1>0)]
+length(mv_loadings_mv1_pos)
+
+#selecting only negative MV1
+mv_loadings_mv1_neg <- mv_loadings_mv1[which(mv_loadings_mv1<0)]
+length(mv_loadings_mv1_neg)
+
+#hypeR parameter settings
+
+library(qusage)
+
+library(hypeR)
+
+# HyperR database
+#H <-msigdb_download("Homo sapiens", "H", "")
+BIOCARTA <- msigdb_download("Homo sapiens", "C2", "CP:BIOCARTA")
+KEGG <- msigdb_download("Homo sapiens", "C2", "CP:KEGG_LEGACY")
+REACTOME <- msigdb_download("Homo sapiens", "C2", "CP:REACTOME")
+
+#combined these databases
+HBKR <- c(BIOCARTA,KEGG, REACTOME)
+
+
+#hypeR analysis for MV1 positive features
+hyp_HBKR_pos <- hypeR(unique(names(mv_loadings_mv1_pos)), HBKR, test="hypergeometric")
+hyp_show(hyp_HBKR_pos)
+#pdf("20240723_COLOSSUS_MV1_pos_genes_HBKR_hyperR.pdf")
+hyp_dots(hyp_HBKR_pos, fdr = 0.2, top = 20)
+#dev.off()
+hyp_emap(hyp_HBKR_pos, top=100, val="fdr", fdr = 0.2)
+
+#hypeR analysis for MV1 negative features
+hyp_HBKR_neg <- hypeR(names(mv_loadings_mv1_neg), HBKR, test="hypergeometric")
+hyp_show(hyp_HBKR_neg )
+#pdf("20240723_COLOSSUS_MV1_neg_genes_HBKR_hyperR.pdf")
+hyp_dots(hyp_HBKR_neg , fdr = 0.2, top = 15)
+#dev.off()
+hyp_emap(hyp_HBKR_neg , top=100, val="fdr", fdr = 0.2)
+
+```
+
+```{r}
+## ============================================================
+## MV1 Loading Feature Extraction & hypeR Pathway Enrichment
+## COLOSSUS | iPhenMap | VHIO Validation Cohort
+## Sadanandam Lab, ICR
+## ============================================================
+
+library(hypeR)
+library(msigdbr)
+library(dplyr)
+library(stringr)
+
+# ── 1. Read scaled loadings ────────────────────────────────────────────────────
+
+loadings_path <- file.path(
+  "Anguraj",
+  "Retrospective_data/integrative_analysis/VHIO_only/validation",
+  "test_to_1M_QC/VST/sd1/iPhenMAPresults/MetaGenes",
+  "scaledLoadingsCoefficients.txt"
+)
+
+mv_loadings <- read.table(
+  loadings_path,
+  header = TRUE,
+  sep    = "\t",
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+
+# ── 2. Inspect dimensions ──────────────────────────────────────────────────────
+
+cat("Dimensions of mv_loadings:", dim(mv_loadings), "\n")
+cat("Column names:", paste(colnames(mv_loadings), collapse = ", "), "\n")
+cat("First few rows:\n")
+print(head(mv_loadings))
+
+# ── 3. Keep rows with non-NA MV1 values ───────────────────────────────────────
+
+mv_loadings <- mv_loadings[!is.na(mv_loadings$MV1), , drop = FALSE]
+cat("\nRows retained after NA removal:", nrow(mv_loadings), "\n")
+
+# ── 4. Rotate MV1 (flip sign) ─────────────────────────────────────────────────
+
+mv_loadings$MV1 <- mv_loadings$MV1 * -1
+cat("MV1 loadings sign-flipped (rotated by 180°).\n")
+
+# ── 5. Apply MV1 loading cutoff ───────────────────────────────────────────────
+
+mv1_pos_idx <- which(mv_loadings$MV1 >= 2)
+mv1_neg_idx <- which(mv_loadings$MV1 <= -2)
+
+cat("MV1 positive features (>= 2):", length(mv1_pos_idx), "\n")
+cat("MV1 negative features (<= -2):", length(mv1_neg_idx), "\n")
+
+# ── 6. Combine selected MV1 features ──────────────────────────────────────────
+
+selected_idx     <- c(mv1_pos_idx, mv1_neg_idx)
+selected_loadings <- mv_loadings[selected_idx, , drop = FALSE]
+
+# ── 7. Extract MV1 values and feature names ────────────────────────────────────
+
+mv1_values    <- selected_loadings$MV1
+feature_names <- rownames(selected_loadings)
+
+cat("\nSelected feature names (first 10):\n")
+print(head(feature_names, 10))
+
+# ── 8. Identify and parse protein-like entries (contain "_") ──────────────────
+
+is_protein <- grepl("_", feature_names)
+cat("\nProtein-like entries:", sum(is_protein), "| Gene-like entries:", sum(!is_protein), "\n")
+
+parse_protein_name <- function(feat) {
+  # Format: <UNIPROT_ID>_<GENE_SYMBOL>  e.g. P13284_IFI30
+  # Gene symbol is always the LAST field after splitting on "_"
+  parts <- strsplit(feat, "_")[[1]]
+  candidate <- parts[length(parts)]
+  
+  # Safety fallback: if last field is empty or NA, return the full feature name
+  if (is.na(candidate) || candidate == "") candidate <- feat
+  
+  return(candidate)
+}
+
+parsed_names <- feature_names
+parsed_names[is_protein] <- sapply(feature_names[is_protein], parse_protein_name)
+
+# Safety check: if any parsed name is still "", keep original feature name
+empty_idx <- which(parsed_names == "" | is.na(parsed_names))
+if (length(empty_idx) > 0) {
+  cat("Recovering", length(empty_idx), "empty parsed names — reverting to original feature name.\n")
+  parsed_names[empty_idx] <- feature_names[empty_idx]
+}
+
+cat("\nParsed feature names (first 10):\n")
+print(head(parsed_names, 10))
+
+# ── 9. Split into MV1 positive and negative feature sets ──────────────────────
+
+# Re-index relative to selected_loadings (rows 1:length(mv1_pos_idx) are positive)
+n_pos <- length(mv1_pos_idx)
+n_neg <- length(mv1_neg_idx)
+
+mv1_pos_names <- unique(parsed_names[seq_len(n_pos)])
+mv1_neg_names <- unique(parsed_names[(n_pos + 1):(n_pos + n_neg)])
+
+cat("\nUnique MV1 positive feature names:", length(mv1_pos_names), "\n")
+cat("Unique MV1 negative feature names:", length(mv1_neg_names), "\n")
+
+# ── 10. Load pathway gene set collections ─────────────────────────────────────
+
+cat("\nLoading pathway gene sets from MSigDB...\n")
+
+biocarta  <- msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:BIOCARTA")
+kegg      <- msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:KEGG_LEGACY")
+reactome  <- msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:REACTOME")
+
+# Convert to named list of gene sets
+make_genesets <- function(df) {
+  df %>%
+    group_by(gs_name) %>%
+    summarise(genes = list(gene_symbol), .groups = "drop") %>%
+    { setNames(.$genes, .$gs_name) }
+}
+
+HBKR <- c(
+  make_genesets(biocarta),
+  make_genesets(kegg),
+  make_genesets(reactome)
+)
+
+cat("Total pathways in HBKR:", length(HBKR), "\n")
+
+# ── 11. Run hypeR enrichment ───────────────────────────────────────────────────
+
+cat("\nRunning hypeR on MV1 POSITIVE features...\n")
+hyp_pos <- hypeR(
+  signature = mv1_pos_names,
+  genesets  = HBKR,
+  test      = "hypergeometric",
+  #background = 20000,     # approximate human proteome/genome background
+ # pval      = 1,
+ # fdr       = 0.2,
+ # quiet     = FALSE
+)
+
+cat("\nRunning hypeR on MV1 NEGATIVE features...\n")
+hyp_neg <- hypeR(
+  signature = mv1_neg_names,
+  genesets  = HBKR,
+  test      = "hypergeometric",
+ # background = 20000,
+ #  pval      = 1,
+ #  fdr       = 0.2,
+ # quiet     = FALSE
+)
+
+# ── 12. View enrichment tables ─────────────────────────────────────────────────
+
+cat("\n=== MV1 POSITIVE enrichment table ===\n")
+hyp_show(hyp_pos)
+
+cat("\n=== MV1 NEGATIVE enrichment table ===\n")
+hyp_show(hyp_neg)
+
+# ── 13. Dot plots ─────────────────────────────────────────────────────────────
+
+cat("\nGenerating dot plots...\n")
+
+p_dot_pos <- hyp_dots(hyp_pos, fdr = 0.2, top = 15, title = "MV1 Positive — Top 20 Pathways")
+p_dot_neg <- hyp_dots(hyp_neg, fdr = 0.2, top = 20, title = "MV1 Negative — Top 15 Pathways")
+
+print(p_dot_pos)
+print(p_dot_neg)
+
+# Save plots as PDF
+pdf("4D_hypeR_MV1_positive_dotplot.pdf", width = 9, height = 7)
+print(p_dot_pos)
+dev.off()
+
+pdf(file.path(out_dir, "S10I_hypeR_MV1_negative_dotplot.pdf"), width = 9, height = 7)
+print(p_dot_neg)
+dev.off()
+
+
+cat("\n✓ All outputs saved to:", out_dir, "\n")
+
+# ── 16. Session info ──────────────────────────────────────────────────────────
+sessionInfo()
+```
+
