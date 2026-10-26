@@ -1,0 +1,1267 @@
+---
+title: "Supplementary Figure S12C – PNI and relapse metabolite-protein validation (all samples)"
+author: "Sadanandam Lab, Institute of Cancer Research, London"
+date: "May 2026"
+output: html_notebook
+---
+
+<!--
+================================================================================
+  Figure Panel  : Supp S12C
+  Description   : Validation analyses in all COLOSSUS St2/3 samples: metabolite ~ PNI and metabolite ~
+                  relapse associations over 1,000 resamples, protein (RPPA and LC-MS/MS) x metabolite
+                  interaction frequencies, and pathway enrichment of the interacting proteins.
+  Input data    : scaledLoadingsCoefficients.txt
+                  20200902_ColossusResults_Metabolomics_2_tissue_weight_Centre_run_batch_corrected_data.txt
+                  MV_clustering.txt
+                  20250426_VHIO_retrospective_clinical_PNI_Lym_RFS_PNI_NA_removed.txt
+                  20200928_metabolomics_median_replicates_data_80_Non_zero_sample_median_centred_imputed_MARS_combat_lysis_batch.txt
+                  20250512_COLOSUSS_MV2_6_known_sig_metabolites_protein_expression_all_regression_interaction_PNI_metabolites_p_values_005_Positive_Negative_MSigDB_Hallmark_2020_table-2_MSigDB_Hallmark_2020_table.txt
+                  20250509_COLOSUSS_MV2_6_known_sig_metabolites_protein_expression_sd1_correlation_p_values_005_Positive_correlation_MSigDB_Hallmark_2020_table-2_MSigDB_Hallmark_2020_table-2.txt
+                  20250514_COLOSSUS_negative_proteins_relapse_metabolites_interactions_1000_iterations.txt
+                  20200803_Colossus_RPPA_datasheet_June15_normalized_data_Jochen.txt
+                  20250512_COLOSSUS_protein_metabolite_PNI_interaction_1000_times_summary_RPPA_data_WikiPathways_2024_Mouse_table_positive.txt
+  Output        : 20250512_COLOSSUS_PNI_metabolites_protein_1000_iterations_top_9_PDK1_p_value_plot.pdf
+                  20250512_COLOSSUS_protein_metabolite_PNI_interaction_1000_times_summary_RPPA_data_WikiPathways_2024_Mouse_table_positive_lolipop_plot.pdf
+                  20250413_COLOSSUS_phenmap_RELAPSE_MV6_metabolite_ass#ociation_1000_iterations_frequency_plot.pdf
+                  20250513_COLOSSUS_phenmap_RELAPSE_MV6_metabolite_association_1000_iterations.pdf
+                  20250513_COLOSSUS_protein_metabolite_RELAPSE_interaction_1000_times_summary.txt
+                  20250512_COLOSSUS_RELAPSE_metabolites_protein_1000_iterations_histogram_0.5_frequency_plot.pdf
+                  20250512_COLOSUSS_MV2_6_known_sig_metabolites_protein_expression_all_regression_interaction_PNI_metabolites_p_values_005_Positive_Negative_MSigDB_Hallmark_2020_table-2_MSigDB_Hallmark_2020_table_bar_plot.pdf
+                  20250514_COLOSSUS_positive_proteins_relapse_metabolite_interaction_1000_iterations_HALLMARK_network_plot.pdf
+                  20250514_COLOSSUS_protein_metabolite_RELAPSE_interaction_1000_times_summary_RPPA_data.txt
+                  20250512_COLOSSUS_PNI_metabolites_protein_1000_iterations_density_plot_RPPA_Data.pdf
+                  20250512_COLOSSUS_PNI_metabolites_protein_1000_iterations_histogram_0.5_frequency_plot.pdf
+                  20250514_COLOSSUS_RELAPSE_metabolites_protein_1000_iterations_RPPA_Data_bubble_plot.pdf
+  R packages    : ggrepel, ggplot2, tidyr, dplyr, stringr, parallel, scales, broom, interactions, viridis, clusterProfiler, org.Hs.eg.db, msigdbr, enrichplot, qusage, readr
+  Authors       : Sadanandam Lab, Institute of Cancer Research, London
+  Contact       : anguraj.sadanandam@icr.ac.uk
+  Note          : Panel letter kept from the draft (11C); draft MV numbering (MV2/MV6) in the code.
+================================================================================
+-->
+
+```{r}
+#read scaled coefficients
+loadings <- read.delim("scaledLoadingsCoefficients.txt")
+dim(loadings)
+
+#choose those metabolites from MV2 and MV with cutoff of 3
+
+
+mv6_loadings_nna <- cbind(rownames(loadings)[which(!is.na(loadings$MV6))], loadings$MV6[which(!is.na(loadings$MV6))])
+dim(mv6_loadings_nna)
+
+mv6_loadings_nna_unk <- cbind(mv6_loadings_nna[-grep("unknown",mv6_loadings_nna),1],mv6_loadings_nna[-grep("unknown",mv6_loadings_nna),2])
+dim(mv6_loadings_nna_unk)
+  
+mv6_loadings_nna_unk_sig <-  cbind(mv6_loadings_nna_unk[(as.numeric(mv6_loadings_nna_unk[,2]) > 3 | as.numeric(mv6_loadings_nna_unk[,2]) < (-3)),1],mv6_loadings_nna_unk[(as.numeric(mv6_loadings_nna_unk[,2]) > 3 | as.numeric(mv6_loadings_nna_unk[,2]) < (-3)),2])
+dim(mv6_loadings_nna_unk_sig)
+
+```
+```{r}
+#read metabolomics data
+
+metab <- read.delim("20200902_ColossusResults_Metabolomics_2_tissue_weight_Centre_run_batch_corrected_data.txt", stringsAsFactors = FALSE)
+dim(metab)
+
+```
+
+```{r}
+#match metabolites between metabolic dataset and mv loadings
+known <- mv6_loadings_nna_unk_sig[,1] #mv6
+metabolites <- metab$Metabolites
+
+# Safe parsing function
+parse_entry_safe <- function(entry) {
+  entry <- iconv(entry, to = "UTF-8", sub = "byte")
+  parts <- unlist(strsplit(entry, "_"))
+  if (length(parts) < 3) return(NULL)
+  
+  name <- paste0(parts[1:(length(parts) - 2)], collapse = "_")
+  mass <- suppressWarnings(as.numeric(parts[length(parts) - 1]))
+  rt <- suppressWarnings(as.numeric(parts[length(parts)]))
+  
+  if (is.na(mass) || is.na(rt)) return(NULL)
+  
+  return(list(name = gsub("[[:punct:]]", "", name), mass = mass, rt = rt))
+}
+
+# Parse known and metabolites
+known_list <- Filter(Negate(is.null), lapply(known, parse_entry_safe))
+metabolites_list <- Filter(Negate(is.null), lapply(metabolites, parse_entry_safe))
+
+# Convert to data frames
+known_df <- as.data.frame(do.call(rbind, known_list), stringsAsFactors = FALSE)
+metabolites_df <- as.data.frame(do.call(rbind, metabolites_list), stringsAsFactors = FALSE)
+
+# Ensure numeric
+known_df$mass <- as.numeric(known_df$mass)
+known_df$rt <- as.numeric(known_df$rt)
+metabolites_df$mass <- as.numeric(metabolites_df$mass)
+metabolites_df$rt <- as.numeric(metabolites_df$rt)
+
+# Thresholds
+delta_mass <- 0.02
+delta_rt <- 0.1
+
+# Find matching indices in metabolites for each known
+matched_indices <- sapply(1:nrow(known_df), function(i) {
+  matches <- which(abs(known_df$mass[i] - metabolites_df$mass) <= delta_mass &
+                   abs(known_df$rt[i] - metabolites_df$rt) <= delta_rt)
+  if (length(matches) > 0) return(matches[1]) else return(NA)
+})
+
+# Output: indices of first match for each known in metabolites
+print(matched_indices)
+
+
+head(metab[matched_indices,1:5])
+
+metab_matched <- metab[matched_indices,]
+dim(metab_matched)
+```
+```{r}
+# reading MVs
+
+mv <- read.delim("MV_clustering.txt", stringsAsFactors = FALSE)
+
+dim(mv)
+
+m_mv <- match(mv$samples,colnames(metab_matched))
+metab_matched_1 <- metab_matched[,-c(1,m_mv)]
+rownames(metab_matched_1) <- metab_matched[,1]
+dim(metab_matched_1)
+head(metab_matched_1[,1:5])
+
+#metab_mv <- cbind(colnames(metab_matched_1),t(metab_matched_1),mv)
+
+```
+
+```{r}
+#clinical data
+clin <- read.delim("20250426_VHIO_retrospective_clinical_PNI_Lym_RFS_PNI_NA_removed.txt", stringsAsFactors = FALSE)
+dim(clin)
+
+m_clin <- match(gsub("\\.","-",colnames(metab_matched)[-1]),clin$COLOSSUS_ID)
+w_clin <- which(!is.na(m_clin))
+clin_1 <- clin[m_clin[w_clin],]
+dim(clin_1)
+
+mmet <- t(metab_matched[,(w_clin+1)])
+
+colnames(mmet) <- metab_matched[,1]
+
+metab_clin <- cbind(clin_1,colnames(metab_matched)[(w_clin+1)],mmet)
+dim(metab_clin)
+```
+
+```{r}
+#linear regression
+# Ensure ggrepel is installed
+#if (!require("ggrepel")) install.packages("ggrepel")
+library(ggrepel)
+
+# Convert PNI to binary
+metab_clin$PNI <- metab_clin$status_relapse
+
+# Identify metabolite columns
+start_col <- which(names(metab_clin) == "2-Ethylhydracrylic acid_118.06_2.84") #MV6
+metabolite_cols <- start_col:ncol(metab_clin)
+
+# Run models
+results <- data.frame(Metabolite = character(), Estimate = numeric(), P_value = numeric())
+
+for (met in names(metab_clin)[metabolite_cols]) {
+  model <- lm(metab_clin[[met]] ~ metab_clin$PNI)
+  sm <- summary(model)
+  est <- coef(sm)[2, "Estimate"]
+  pval <- coef(sm)[2, "Pr(>|t|)"]
+  results <- rbind(results, data.frame(Metabolite = met, Estimate = est, P_value = pval))
+}
+
+# Add logP and significance
+results$logP <- -log10(results$P_value)
+results$Significant <- results$P_value < 0.05
+
+library(ggplot2)
+library(ggrepel)
+# Volcano plot with labels
+ggplot(results, aes(x = Estimate, y = logP, color = Significant)) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "gray50") +
+  geom_text_repel(
+    data = subset(results, Significant == TRUE),
+    aes(label = Metabolite),
+    size = 3.2,
+    max.overlaps = Inf
+  ) +
+  labs(
+    x = "Effect size (Estimate)",
+    y = expression(-log[10](p)),
+    title = "Metabolite Association with PNI"
+  ) +
+  scale_color_manual(values = c("FALSE" = "gray70", "TRUE" = "firebrick")) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5)
+  )
+
+#boxplot
+boxplot(as.numeric(unlist(metab_clin[,metabolite_cols[6]])) ~ metab_clin$status_relapse)
+kruskal.test(as.numeric(unlist(metab_clin[,metabolite_cols[6]])) ~ metab_clin$status_relapse)
+```
+
+```{r}
+#run 1000 iterations of resampling 70% training and 30% test samples from 177 samples
+
+library(ggrepel)
+set.seed(123)  # for reproducibility
+
+# Convert PNI to binary
+metab_clin$PNI <- metab_clin$status_relapse
+
+# Identify metabolite columns
+start_col <- which(names(metab_clin) == "2-Ethylhydracrylic acid_118.06_2.84") #MV6
+metabolite_cols <- start_col:ncol(metab_clin)
+metabolite_names <- names(metab_clin)[metabolite_cols]
+
+# Initialize results storage
+sig_counts <- setNames(rep(0, length(metabolite_names)), metabolite_names)
+
+# Run 1000 iterations
+for (i in 1:10) {
+  # Split data into 70% training, 30% testing
+  idx <- sample(1:nrow(metab_clin), size = 0.7 * nrow(metab_clin))
+  train <- metab_clin[idx, ]
+  
+  for (met in metabolite_names) {
+    model <- lm(train[[met]] ~ train$PNI)
+    sm <- summary(model)
+    pval <- coef(sm)[2, "Pr(>|t|)"]
+    
+    if (!is.na(pval) && pval < 0.05) {
+      sig_counts[met] <- sig_counts[met] + 1
+    }
+  }
+}
+
+# Convert to data frame and sort
+sig_df <- data.frame(
+  Metabolite = names(sig_counts),
+  Frequency = as.numeric(sig_counts)
+)
+sig_df <- sig_df[order(-sig_df$Frequency), ]
+
+# View top metabolites
+head(sig_df, 10)
+
+#generate the frequency bar plot
+# Reorder factors by frequency
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+sig_df_filtered <- sig_df %>%
+  filter(Metabolite != "PNI") %>%
+  mutate(Percentage = 100 * Frequency / 1000)
+
+# Reorder factors by percentage
+sig_df_filtered$Metabolite <- factor(sig_df_filtered$Metabolite, levels = sig_df_filtered$Metabolite[order(sig_df_filtered$Percentage, decreasing = TRUE)])
+
+
+# Plot
+
+#pdf("20250413_COLOSSUS_phenmap_RELAPSE_MV6_metabolite_ass#ociation_1000_iterations_frequency_plot.pdf")
+ggplot(sig_df_filtered, aes(x = Metabolite, y = Percentage)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Percentage of Times Metabolites Were Significant (1000 runs)",
+       x = "Metabolite", y = "Percentage (%)") +
+  theme_minimal()
+#dev.off()
+```
+
+```{r}
+#save effect sizes
+# Initialize
+# Load libraries
+library(dplyr)
+library(ggplot2)
+library(stringr)
+
+# Set seed for reproducibility
+set.seed(303)
+
+# Convert PNI to binary
+# Convert PNI to binary
+metab_clin$PNI <- metab_clin$status_relapse
+
+# Define metabolite columns
+start_col <- which(names(metab_clin) == "2-Ethylhydracrylic acid_118.06_2.84") #MV6
+metabolite_names <- names(metab_clin)[start_col:ncol(metab_clin)]
+
+# Exclude PNI from the metabolite list
+metabolite_names <- setdiff(metabolite_names, "PNI")
+
+# Initialize results storage
+all_results <- data.frame(
+  Iteration = integer(),
+  Metabolite = character(),
+  Estimate = numeric(),
+  P_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Track warnings
+perfect_fit_count <- 0
+warning_metabolites <- character()
+
+# Run 1000 iterations
+for (i in 1:1000) {
+  idx <- sample(1:nrow(metab_clin), size = 0.7 * nrow(metab_clin))
+  train <- metab_clin[idx, ]
+  
+  for (met in metabolite_names) {
+    model <- lm(train[[met]] ~ train$PNI)
+    
+    sm <- withCallingHandlers(
+      summary(model),
+      warning = function(w) {
+        if (grepl("essentially perfect fit", w$message)) {
+          perfect_fit_count <<- perfect_fit_count + 1
+          warning_metabolites <<- c(warning_metabolites, met)
+        }
+        invokeRestart("muffleWarning")
+      }
+    )
+    
+    if (!is.na(coef(sm)[2, "Pr(>|t|)"])) {
+      est <- coef(sm)[2, "Estimate"]
+      pval <- coef(sm)[2, "Pr(>|t|)"]
+      
+      
+      all_results <- rbind(all_results, data.frame(
+        Iteration = i,
+        Metabolite = met,
+        Estimate = est,
+        P_value = pval
+      ))
+    }
+  }
+}
+
+# Report total warning count
+cat("Number of 'essentially perfect fit' warnings:", perfect_fit_count, "\n")
+
+# Summarize results
+summary_df <- all_results %>%
+  group_by(Metabolite) %>%
+  summarise(
+    Mean_Estimate = mean(Estimate, na.rm = TRUE),
+    SD_Estimate = sd(Estimate, na.rm = TRUE),
+    Mean_logP = mean(-log10(P_value), na.rm = TRUE),
+    Freq_Sig = mean(P_value < 0.05, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(Significance_Level = case_when(
+    Freq_Sig > 0.2 ~ ">20%",
+    Freq_Sig > 0.1 ~ "10–20%",
+    TRUE ~ "<=10%"
+  ))
+
+# Fix encoding and clean names
+summary_df$Metabolite <- iconv(summary_df$Metabolite, from = "", to = "UTF-8", sub = "byte")
+summary_df$Clean_Name <- sub("_.*", "", summary_df$Metabolite)
+summary_df$Clean_Name <- str_wrap(summary_df$Clean_Name, width = 20)
+
+# Plot with horizontal line at 0
+#pdf("20250513_COLOSSUS_phenmap_RELAPSE_MV6_metabolite_association_1000_iterations.pdf")
+ggplot(summary_df, aes(x = reorder(Clean_Name, Mean_Estimate), y = Mean_Estimate, color = Significance_Level)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  geom_point(aes(size = Freq_Sig)) +
+  geom_errorbar(aes(ymin = Mean_Estimate - SD_Estimate, ymax = Mean_Estimate + SD_Estimate), width = 0.2) +
+  labs(
+    title = "Metabolite Effects on PNI (1000 Iterations)",
+    x = "Metabolite", y = "Mean Linear Estimate",
+    size = "Significance Frequency", color = "Significance Level"
+  ) +
+  scale_color_manual(values = c(">20%" = "firebrick", "10–20%" = "orange", "<=10%" = "gray60")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+#dev.off()
+
+# selected metabolites
+sel <- which(summary_df$Significance_Level == "10–20%" | summary_df$Significance_Level == ">20%")
+
+mm <- match(summary_df$Metabolite[sel], metab_matched$Metabolites)
+metab_matched_sel <- metab_matched[mm,]
+dim(metab_matched_sel)
+
+```
+```{r}
+#clinical data
+clin <- read.delim("20250426_VHIO_retrospective_clinical_PNI_Lym_RFS_PNI_NA_removed.txt", stringsAsFactors = FALSE)
+dim(clin)
+
+m_clin_1 <- match(gsub("\\.","-",colnames(metab_matched_sel)[-1]),clin$COLOSSUS_ID)
+w_clin_1 <- which(!is.na(m_clin_1))
+clin_2 <- clin[m_clin_1[w_clin_1],]
+dim(clin_2)
+
+mmet_1 <- t(metab_matched_sel[,(w_clin_1+1)])
+
+colnames(mmet_1) <- metab_matched_sel[,1]
+
+metab_clin_sel <- cbind(clin_2,colnames(metab_matched_sel)[(w_clin_1+1)],mmet_1)
+dim(metab_clin_sel)
+```
+
+```{r}
+
+#boxplot for metabolites with PNI yes or no
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# Gather data
+data_long <- metab_clin %>%
+  select(PNI, `Galactitol_182.08_12.08`, `4-Ethyloctanoic acid_172.15_2.92`, `Butyric acid_88.05_3.29`) %>%
+  pivot_longer(-PNI, names_to = "Metabolite", values_to = "Abundance")
+
+# Plot
+ggplot(data_long, aes(x = factor(PNI), y = Abundance, fill = factor(PNI))) +
+  geom_boxplot() +
+  facet_wrap(~Metabolite, scales = "free_y") +
+  labs(x = "PNI Status", fill = "PNI", title = "Metabolite Levels by PNI Status") +
+  theme_minimal()
+```
+
+
+```{r}
+#PNI or recurrence vs MVs
+metab_mv_clin <- cbind(clin_1,colnames(metab_matched_1),t(metab_matched_1),mv)
+
+#recurrence vs MV6
+boxplot(metab_mv_clin$MV6~metab_mv_clin$status)
+t.test(metab_mv_clin$MV6~metab_mv_clin$perineural_invasion)
+kruskal.test(metab_mv_clin$MV6~metab_mv_clin$perineural_invasion)
+```
+
+
+
+```{r}
+#clinical data
+clin <- read.delim("20250426_VHIO_retrospective_clinical_PNI_Lym_RFS_PNI_NA_removed.txt", stringsAsFactors = FALSE)
+dim(clin)
+
+
+
+m_clin_p <- match(gsub("\\.","-",str_sub(colnames(protein_corr),1,13 )),clin$COLOSSUS_ID)
+w_clin_p <- which(!is.na(m_clin_p))
+clin_1_p <- clin[m_clin[w_clin_p],]
+dim(clin_1_p)
+
+protein_corr_clin <- cbind(clin_1_p,colnames(protein_corr)[(w_clin_p)],t(protein_corr[,w_clin_p]))
+dim(protein_corr_clin)
+
+# t test
+
+t<- NULL
+p <- NULL
+
+for( i in 10:ncol(protein_corr_clin)){
+  t[i] <- t.test(protein_corr_clin[,i]~protein_corr_clin$perineural_invasion)$statistic
+    p[i] <- t.test(protein_corr_clin[,i]~protein_corr_clin$perineural_invasion)$p.value
+}
+
+#correlation
+
+# Match clinical PNI status to samples
+sample_ids <- gsub("\\.","-",str_sub(colnames(protein_exp_sd_1),1,13 ))
+clin_filtered <- clin %>% filter(COLOSSUS_ID %in% sample_ids)
+clin_ordered <- clin_filtered[match(sample_ids, clin_filtered$COLOSSUS_ID), ]
+PNI_status <- clin_ordered$perineural_invasion
+PNI_status <- ifelse(tolower(trimws(PNI_status)) == "yes", "Yes",
+                     ifelse(tolower(trimws(PNI_status)) == "no", "No", NA))
+```
+
+
+```{r}
+
+# repeated 1000 times  # proteins ~ PNI+metabolites
+# Set seed for reproducibility
+set.seed(42)
+
+# Ensure ggrepel is installed
+#if (!require("ggrepel")) install.packages("ggrepel")
+library(ggrepel)
+
+# Convert PNI to binary
+metab_clin_sel$PNI <- ifelse(tolower(metab_clin_sel$perineural_invasion) == "yes", 1, 0)
+
+
+protein_exp <- read.delim("20200928_metabolomics_median_replicates_data_80_Non_zero_sample_median_centred_imputed_MARS_combat_lysis_batch.txt", stringsAsFactors = FALSE)
+dim(protein_exp)
+
+ssdp <- apply(protein_exp,1,sd)
+w_ssdp <- which(ssdp > 0)
+length(w_ssdp)
+
+protein_exp_sd <- protein_exp[w_ssdp,]
+dim(protein_exp_sd)
+
+# 1. Transpose protein matrix: make samples rows, proteins columns
+protein_long <- as.data.frame(t(protein_exp_sd))
+protein_long$sample_id <- rownames(protein_long)
+
+# 2. Fix sample ID format to match metab_clin_sel$COLOSSUS_ID
+# If protein colnames are like COL.268.R.001_FP_001, convert to COL-268-R-001
+protein_long$COLOSSUS_ID <- gsub("\\.", "-", gsub("_FP_.*", "", protein_long$sample_id))
+
+# 3. Subset metabolite columns of interest
+selected_mets <- c(
+  "Dodecanoic acid_200.18.2.92", 
+  "Myristic acid_228.21_2.92",
+  "2-Ethylhydracrylic acid_118.06_3.59"
+)
+
+met_cols <- grep(paste(selected_mets, collapse = "|"), colnames(metab_clin_sel), value = TRUE)
+
+# 4. Merge protein expression with clinical/metabolite data
+combined_data <- merge(protein_long, metab_clin_sel[, c("COLOSSUS_ID", "status_relapse", met_cols)], by = "COLOSSUS_ID")
+
+# 5. Get protein and metabolite column names
+protein_names <- setdiff(colnames(protein_long), c("sample_id", "COLOSSUS_ID"))
+metabolite_names <- met_cols
+
+# 6. Create grid of protein-metabolite combinations
+model_grid <- expand.grid(protein = protein_names, metabolite = metabolite_names, stringsAsFactors = FALSE)
+
+# Number of resampling iterations
+n_iter <- 1000
+
+# Threshold for significance (e.g., p < 0.05)
+p_thresh <- 0.05
+
+# Track hits
+library(dplyr)
+library(parallel)
+# Initialize tracking structures
+interaction_hits <- matrix(0, nrow = length(protein_names), ncol = length(metabolite_names),
+                           dimnames = list(protein_names, metabolite_names))
+all_results_list <- list()
+
+# Main resampling loop
+for (i in 1:n_iter) {
+  cat("Iteration:", i, "\n")
+  
+  # Split data (70% train)
+  train_idx <- sample(seq_len(nrow(combined_data)), size = floor(0.7 * nrow(combined_data)))
+  train_data <- combined_data[train_idx, ]
+  
+  iter_results <- list()
+  
+  for (protein in protein_names) {
+    for (metabolite in metabolite_names) {
+      df <- train_data[, c(protein, "status_relapse", metabolite)]
+      colnames(df) <- c("protein_val", "status_relapse", "met_val")
+      
+      df$protein_val <- as.numeric(df$protein_val)
+      df$status_relapse <- as.numeric(df$status_relapse)
+      df$met_val <- as.numeric(df$met_val)
+      
+      df <- df[complete.cases(df) & is.finite(df$protein_val) & is.finite(df$met_val), ]
+      if (nrow(df) < 5) next
+      
+      model <- tryCatch(lm(protein_val ~ status_relapse * met_val, data = df), error = function(e) NULL)
+      if (is.null(model)) next
+      
+      summ <- summary(model)$coefficients
+      if ("status_relapse:met_val" %in% rownames(summ)) {
+        pval <- summ["status_relapse:met_val", "Pr(>|t|)"]
+        est  <- summ["status_relapse:met_val", "Estimate"]
+        r2   <- summary(model)$r.squared
+        
+        if (!is.na(pval) && pval < p_thresh) {
+          interaction_hits[protein, metabolite] <- interaction_hits[protein, metabolite] + 1
+          
+          iter_results[[length(iter_results) + 1]] <- data.frame(
+            iteration = i,
+            protein = protein,
+            metabolite = metabolite,
+            estimate_interaction = est,
+            pval_interaction = pval,
+            r_squared = r2,
+            stringsAsFactors = FALSE
+          )
+        }
+      }
+    }
+  }
+  
+  if (length(iter_results) > 0) {
+    all_results_list[[i]] <- do.call(rbind, iter_results)
+  }
+}
+
+# Combine all iterations
+all_results <- do.call(rbind, all_results_list)
+
+# Compute frequency of significance
+interaction_freq <- interaction_hits / n_iter
+
+# Summarize average results
+library(dplyr)
+summary_stats <- all_results %>%
+  group_by(protein, metabolite) %>%
+  summarise(
+    n_hits = n(),
+    mean_estimate_interaction = mean(estimate_interaction, na.rm = TRUE),
+    mean_pval_interaction = mean(pval_interaction, na.rm = TRUE),
+    mean_r_squared = mean(r_squared, na.rm = TRUE),
+    frequency = n_hits / n_iter,
+    .groups = "drop"
+  ) %>%
+  filter(frequency >= 0.5)  # raise to 0.9 for stricter selection
+
+# View or save summary
+print(summary_stats)
+# write.table(summary_stats, "20250513_COLOSSUS_protein_metabolite_RELAPSE_interaction_1000_times_summary.txt", row.names = FALSE, sep = "\t", quote = FALSE)
+
+#density plot
+library(ggplot2)
+library(dplyr)
+
+# Basic density plot of number of hits
+#pdf("20250512_COLOSSUS_RELAPSE_metabolites_protein_1000_iterations_density_plot")
+ggplot(summary_stats, aes(x = n_hits)) +
+  geom_density(fill = "#67a9cf", alpha = 0.7) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Density of Significant Interaction Counts (n_hits)",
+    subtitle = "Across 1000 resampling iterations",
+    x = "Number of significant hits (n_hits)",
+    y = "Density"
+  )
+#dev.off()
+
+# histogram
+#pdf("20250512_COLOSSUS_RELAPSE_metabolites_protein_1000_iterations_histogram_0.5_frequency_plot.pdf")
+ggplot(summary_stats, aes(x = n_hits)) +
+  geom_histogram(binwidth = 20, fill = "#67a9cf", color = "white") +
+  geom_vline(xintercept = 500, linetype = "dashed", color = "red") +
+  labs(
+    title = "Histogram of Significant Interaction Counts (n_hits)",
+    subtitle = "Dashed line = 50% threshold (500 hits)",
+    x = "Number of significant hits",
+    y = "Count"
+  ) +
+  theme_minimal(base_size = 14)
+#dev.off()
+
+```
+```{r}
+
+# p value plot
+library(ggplot2)
+library(dplyr)
+library(scales)
+
+# Key interaction
+target_protein <- "Q15118_PDK1"
+target_met <- "2-Ethylhydracrylic acid_118.06_3.42"
+
+# Get top 9 by mean p-value
+top_interactions <- summary_stats %>%
+  arrange(mean_pval_interaction) %>%
+  slice_head(n = 9)
+
+# Add target if not in top 9
+target_row <- summary_stats %>%
+  filter(protein == target_protein & metabolite == target_met)
+
+if (nrow(target_row) > 0 && !any(with(top_interactions, protein == target_protein & metabolite == target_met))) {
+  top_interactions <- bind_rows(top_interactions, target_row)
+}
+
+# Re-factor for display order
+top_interactions <- top_interactions %>%
+  mutate(
+    protein = factor(protein, levels = unique(protein)),
+    metabolite = factor(metabolite, levels = unique(metabolite)),
+    label = sprintf("%.2e", mean_pval_interaction),
+    text_color = ifelse(mean_pval_interaction < 0.01, "white", "black")  # Adaptive label color
+  )
+
+pdf("20250512_COLOSSUS_PNI_metabolites_protein_1000_iterations_top_9_PDK1_p_value_plot.pdf")
+# Plot
+ggplot(top_interactions, aes(x = metabolite, y = protein, fill = mean_pval_interaction)) +
+  geom_tile(color = "white", width = 0.9, height = 0.9) +
+  geom_text(aes(label = label, color = text_color), size = 4, show.legend = FALSE) +
+  scale_fill_gradient(low = "#2166AC", high = "#F7FBFF", trans = "log10", 
+                      breaks = c(1e-4, 1e-3, 1e-2, 1e-1), labels = scales::scientific,
+                      name = "Mean p-value") +
+  scale_color_identity() +  # Use text_color directly
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+    axis.text.y = element_text(face = "italic"),
+    panel.grid = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks = element_blank()
+  ) +
+  labs(
+    title = "Top Protein–Metabolite Interactions with PNI (Colored by p-value)",
+    subtitle = "Includes Q15118_PDK1 × 2-Ethylhydracrylic acid_118.06_3.42",
+    x = "Metabolite",
+    y = "Protein"
+  )
+dev.off()
+```
+
+
+```{r}
+#PDK1 forest plot
+lm_result <- lm(combined_data$P05067_APP ~ combined_data$status_relapse * combined_data$`Myristic acid_228.21_2.92`)
+
+#lm_result <- lm(combined_data$P22570_FDXR ~ combined_data$PNI * combined_data$`Butyric acid_88.05_3.29`)
+
+# Example: already fit model
+# lm_result <- lm(protein_val ~ PNI * met_val, data = df)
+
+# Load libraries
+library(ggplot2)
+library(dplyr)
+library(broom)
+
+# Tidy the model for plotting
+model_df <- broom::tidy(lm_result, conf.int = TRUE)
+
+# Optional: clean up term names for display
+model_df$term <- recode(model_df$term,
+  `(Intercept)` = "Intercept",
+  `PNI` = "PNI (main effect)",
+  `met_val` = "Metabolite (main effect)",
+  `PNI:met_val` = "PNI × Metabolite (interaction)"
+)
+
+# Create forest plot
+ggplot(model_df, aes(x = estimate, y = term)) +
+  geom_point(size = 3, color = "steelblue") +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2, color = "gray30") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal(base_size = 13) +
+  labs(
+    title = "Forest Plot: Effect Estimates for Protein ~ PNI * Metabolite",
+    x = "Estimate (± 95% CI)",
+    y = "",
+    caption = paste("Protein:Q15118_PDK1 | Metabolite: 2-Ethylhydracrylic acid_118.06_3.42", metabolite_name)
+  )
+
+library(interactions)
+
+plot_interaction_with_p <- function(data, gene_col, pni_col, metabolite_col) {
+  # Rename columns internally for convenience
+  data$Gene <- data[[gene_col]]
+  data$PNI <- data[[pni_col]]
+  data$Metabolite <- data[[metabolite_col]]
+  
+  # Fit interaction model
+  lm_formula <- as.formula("Gene ~ PNI * Metabolite")
+  lm_result <- lm(lm_formula, data = data)
+  
+  # Extract interaction p-value
+  interaction_term <- grep("PNI:Metabolite", rownames(summary(lm_result)$coefficients), value = TRUE)
+  interaction_p <- summary(lm_result)$coefficients[interaction_term, "Pr(>|t|)"]
+  p_label <- paste0("Interaction p = ", signif(interaction_p, 3))
+  
+  # Create plot
+  library(ggplot2)
+  ggplot(data, aes(x = Metabolite, y = Gene, color = as.factor(PNI))) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE) +
+    labs(
+      title = paste("Interaction Between PNI and", metabolite_col, "on", gene_col),
+      x = metabolite_col,
+      y = gene_col,
+      color = "PNI"
+    ) +
+    annotate("text", x = Inf, y = Inf, label = p_label, hjust = 1.1, vjust = 1.5, size = 5) +
+    theme_minimal()
+}
+
+plot_interaction_with_p(
+  data = combined_data,
+  gene_col = "Q9HC84_MUC5B",
+  pni_col = "status_relapse",
+  metabolite_col = "Myristic acid_228.21_2.92"
+)
+
+lm_result <- lm(combined_data$P05067_APP ~ combined_data$status_relapse * combined_data$`Myristic acid_228.21_2.92`)
+
+```
+
+```{r}
+# Enrichment Hallmarks for negative proteins
+
+# Load required libraries
+library(ggplot2)
+library(viridis)
+library(dplyr)
+
+# Read enrichment data
+file_path <- "20250512_COLOSUSS_MV2_6_known_sig_metabolites_protein_expression_all_regression_interaction_PNI_metabolites_p_values_005_Positive_Negative_MSigDB_Hallmark_2020_table-2_MSigDB_Hallmark_2020_table.txt"
+enrichment_df <- read.table(file_path, stringsAsFactors = FALSE, sep = "\t", header = TRUE)
+
+# Check for required columns
+required_cols <- c("Adjusted.P.value", "Odds.Ratio", "Term")
+if (!all(required_cols %in% colnames(enrichment_df))) {
+  stop("Missing required columns: ", paste(setdiff(required_cols, colnames(enrichment_df)), collapse = ", "))
+}
+
+# Filter for adjusted p-value < 0.2
+enrichment_df <- enrichment_df %>%
+  filter(Adjusted.P.value < 0.2)
+
+# Check for empty result
+if (nrow(enrichment_df) == 0) {
+  stop("No enrichment terms passed the adjusted p-value < 0.2 filter.")
+}
+
+# Create plotting variables
+enrichment_df$log10_padj <- -log10(enrichment_df$Adjusted.P.value)
+
+# Ensure unique term labels for factor levels
+enrichment_df$Term_unique <- make.unique(as.character(enrichment_df$Term), sep = "_")
+enrichment_df <- enrichment_df %>%
+  arrange(Odds.Ratio) %>%
+  mutate(Name = factor(Term_unique, levels = Term_unique))
+
+# Create the plot
+#pdf("20250512_COLOSUSS_MV2_6_known_sig_metabolites_protein_expression_all_regression_interaction_PNI_metabolites_p_values_005_Positive_Negative_MSigDB_Hallmark_2020_table-2_MSigDB_Hallmark_2020_table_bar_plot.pdf")
+ggplot(enrichment_df, aes(x = Odds.Ratio, y = Name, fill = log10_padj)) +
+  geom_col(color = "black", width = 0.7) +
+  scale_fill_viridis_c(option = "D", name = expression(-log[10]~"(Adjusted p-value)")) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Hallmarks Enrichment Terms (Adjusted p < 0.2)",
+    x = "Odds Ratio",
+    y = NULL
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.text.y = element_text(size = 12),
+    legend.position = "right"
+  )
+#dev.off()
+
+```
+
+
+```{r}
+#Enrichment Hallmarks for positive proteins
+# Load required libraries
+library(ggplot2)
+library(viridis)
+library(dplyr)
+
+# Read enrichment data from a tab-delimited file
+enrichment_df <- read.table(
+  "20250509_COLOSUSS_MV2_6_known_sig_metabolites_protein_expression_sd1_correlation_p_values_005_Positive_correlation_MSigDB_Hallmark_2020_table-2_MSigDB_Hallmark_2020_table-2.txt",
+  stringsAsFactors = FALSE, sep = "\t", header = TRUE
+)
+
+# Filter for adjusted p-value < 0.05 and process
+enrichment_df <- enrichment_df %>%
+  filter(Adjusted.P.value < 0.05) %>%
+  mutate(
+    log10_padj = -log10(Adjusted.P.value),
+    Name = factor(Term, levels = Term[order(Odds.Ratio)])  # Flip order
+  )
+
+# Plot
+ggplot(enrichment_df, aes(x = Odds.Ratio, y = Name, fill = log10_padj)) +
+  geom_col(color = "black", width = 0.7) +
+  scale_fill_viridis_c(option = "D", name = expression(-log[10]~"(Adjusted p-value)")) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Enrichment Terms (Adjusted p < 0.05)",
+    x = "Odds Ratio",
+    y = NULL
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.text.y = element_text(size = 12),
+    legend.position = "right"
+  )
+```
+```{r}
+#positive proteins for postive metabolites of PNI enrichment - network plot
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(msigdbr)
+library(enrichplot)
+library(dplyr)
+
+# --------------------------------------------
+# Step 2: Read Gene Symbols from File
+# --------------------------------------------
+#gene_file <- "20250514_COLOSSUS_positive_proteins_relapse_metabolites_interactions_1000_iterations.txt"
+
+gene_file <- "20250514_COLOSSUS_negative_proteins_relapse_metabolites_interactions_1000_iterations.txt"
+gene_symbols <- scan(gene_file, what = "character", sep = "\n")
+
+# --------------------------------------------
+# Step 3: Convert SYMBOL to ENTREZ and Map Back
+# --------------------------------------------
+gene_df <- bitr(gene_symbols,
+                fromType = "SYMBOL",
+                toType = "ENTREZID",
+                OrgDb = org.Hs.eg.db)
+
+cat("Mapped genes:", nrow(gene_df), "of", length(gene_symbols), "\n")
+
+# --------------------------------------------
+# Step 4: Load Hallmark Gene Sets (MSigDB category H)
+# --------------------------------------------
+#library(qusage)
+#hallmark_sets <- msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:REACTOME")
+hallmark_sets <- msigdbr(species = "Homo sapiens", category = "H")
+term2gene <- hallmark_sets[, c("gs_name", "entrez_gene")]
+
+
+# --------------------------------------------
+# Step 5: Perform Enrichment (Initial Wide Filter)
+# --------------------------------------------
+enrich_result_all <- enricher(gene = gene_df$ENTREZID,
+                              TERM2GENE = term2gene,
+                              pvalueCutoff = 1)  # Capture all, filter later
+
+# --------------------------------------------
+# Step 6: Filter by FDR (adjusted p-value)
+# --------------------------------------------
+# Keep terms with FDR < 0.1
+enrich_result_all@result <- enrich_result_all@result %>%
+  filter(p.adjust < 0.1)
+
+cat("Terms passing FDR < 0.1:", nrow(enrich_result_all@result), "\n")
+
+# --------------------------------------------
+# Step 7: Replace Entrez IDs with Gene Symbols
+# --------------------------------------------
+entrez_to_symbol <- setNames(gene_df$SYMBOL, gene_df$ENTREZID)
+
+enrich_result_all@result$geneID <- sapply(strsplit(enrich_result_all@result$geneID, "/"), function(ids) {
+  paste(entrez_to_symbol[ids], collapse = "/")
+})
+
+# --------------------------------------------
+# Step 8: Plot Network with Gene Symbols
+# --------------------------------------------
+#pdf("20250514_COLOSSUS_positive_proteins_relapse_metabolite_interaction_1000_iterations_HALLMARK_network_plot.pdf")
+if (nrow(enrich_result_all@result) > 0) {
+  cnetplot(enrich_result_all,
+           showCategory = min(15, nrow(enrich_result_all@result)),  # plot up to 15 terms
+           circular = FALSE,
+           node_label = "all",
+           color.params = list(edge = TRUE)) +
+    ggtitle("Hallmark Enrichment Network (FDR < 0.01)") +
+    theme(legend.position = "none")  # remove right-side category legend
+} else {
+  cat("No enriched terms passed FDR < 0.01.\n")
+}
+#dev.off()
+```
+
+```{r}
+# repeated 1000 times  # proteins ~ PNI+metabolites
+# Set seed for reproducibility
+set.seed(42)
+
+# Ensure ggrepel is installed
+#if (!require("ggrepel")) install.packages("ggrepel")
+library(ggrepel)
+
+# Convert PNI to binary
+#metab_clin_sel$status_relapse <- ifelse(tolower(metab_clin_sel$perineural_invasion) == "yes", 1, 0)
+
+
+protein_exp_r <- read.delim("20200803_Colossus_RPPA_datasheet_June15_normalized_data_Jochen.txt", stringsAsFactors = FALSE, row.names = 1)
+dim(protein_exp_r)
+
+ssdp_r <- apply(protein_exp_r,1,sd)
+w_ssdp_r <- which(ssdp_r > 0)
+length(w_ssdp_r)
+
+protein_exp_sd_r <- protein_exp_r[w_ssdp_r,]
+dim(protein_exp_sd_r)
+
+# 1. Transpose protein matrix: make samples rows, proteins columns
+protein_long_r <- as.data.frame(t(protein_exp_sd_r))
+protein_long_r$sample_id <- rownames(protein_long_r)
+
+# 2. Fix sample ID format to match metab_clin_sel$COLOSSUS_ID
+# If protein colnames are like COL.268.R.001_FP_001, convert to COL-268-R-001
+protein_long_r$COLOSSUS_ID <- gsub("\\.", "-", protein_long_r$sample_id)
+
+# 3. Subset metabolite columns of interest
+selected_mets_r <- c(
+  "Dodecanoic acid_200.18.2.92", 
+  "Myristic acid_228.21_2.92",
+  "2-Ethylhydracrylic acid_118.06_3.59"
+)
+
+met_cols_r <- grep(paste(selected_mets_r, collapse = "|"), colnames(metab_clin_sel), value = TRUE)
+
+# 4. Merge protein expression with clinical/metabolite data
+combined_data_r <- merge(protein_long_r, metab_clin_sel[, c("COLOSSUS_ID", "status_relapse", met_cols_r)], by = "COLOSSUS_ID")
+
+# 5. Get protein and metabolite column names
+protein_names_r <- setdiff(colnames(protein_long_r), c("sample_id", "COLOSSUS_ID"))
+metabolite_names_r <- met_cols_r
+
+# 6. Create grid of protein-metabolite combinations
+model_grid_r <- expand.grid(protein = protein_names_r, metabolite = metabolite_names_r, stringsAsFactors = FALSE)
+
+# Number of resampling iterations
+n_iter_r <- 1000
+
+# Threshold for significance (e.g., p < 0.05)
+p_thresh_r <- 0.05
+
+# Track hits
+library(dplyr)
+library(parallel)
+# Initialize tracking structures
+interaction_hits_r <- matrix(0, nrow = length(protein_names_r), ncol = length(metabolite_names_r),
+                           dimnames = list(protein_names_r, metabolite_names_r))
+all_results_list_r <- list()
+
+# Main resampling loop
+for (i in 1:n_iter_r) {
+  cat("Iteration:", i, "\n")
+  
+  # Split data (70% train)
+  train_idx_r <- sample(seq_len(nrow(combined_data_r)), size = floor(0.7 * nrow(combined_data_r)))
+  train_data_r <- combined_data_r[train_idx_r, ]
+  
+  iter_results_r <- list()
+  
+  for (protein in protein_names_r) {
+    for (metabolite in metabolite_names_r) {
+      df_r <- train_data_r[, c(protein, "status_relapse", metabolite)]
+      colnames(df_r) <- c("protein_val_r", "status_relapse", "met_val_r")
+      
+      df_r$protein_val_r <- as.numeric(df_r$protein_val_r)
+      df_r$status_relapse <- as.numeric(df_r$status_relapse)
+      df_r$met_val_r <- as.numeric(df_r$met_val_r)
+      
+      df_r <- df_r[complete.cases(df_r) & is.finite(df_r$protein_val_r) & is.finite(df_r$met_val_r), ]
+      if (nrow(df_r) < 5) next
+      
+      model_r <- tryCatch(lm(protein_val_r ~ status_relapse * met_val_r, data = df_r), error = function(e) NULL)
+      if (is.null(model_r)) next
+      
+      summ_r <- summary(model_r)$coefficients
+      if ("status_relapse:met_val_r" %in% rownames(summ_r)) {
+        pval_r <- summ_r["status_relapse:met_val_r", "Pr(>|t|)"]
+        est_r  <- summ_r["status_relapse:met_val_r", "Estimate"]
+        r2_r  <- summary(model_r)$r.squared
+        
+        if (!is.na(pval_r) && pval_r < p_thresh_r) {
+          interaction_hits_r[protein, metabolite] <- interaction_hits_r[protein, metabolite] + 1
+          
+          iter_results_r[[length(iter_results_r) + 1]] <- data.frame(
+            iteration_r = i,
+            protein_r = protein,
+            metabolite_r = metabolite,
+            estimate_interaction_r = est_r,
+            pval_interaction_r = pval_r,
+            r_squared_r = r2_r,
+            stringsAsFactors = FALSE
+          )
+        }
+      }
+    }
+  }
+  
+  if (length(iter_results_r) > 0) {
+    all_results_list_r[[i]] <- do.call(rbind, iter_results_r)
+  }
+}
+
+# Combine all iterations
+all_results_r <- do.call(rbind, all_results_list_r)
+
+# Compute frequency of significance
+interaction_freq_r <- interaction_hits_r / n_iter_r
+
+# Summarize average results
+summary_stats_r <- all_results_r %>%
+  group_by(protein_r, metabolite_r) %>%
+  summarise(
+    n_hits_r = n(),
+    mean_estimate_interaction_r = mean(estimate_interaction_r, na.rm = TRUE),
+    mean_pval_interaction_r = mean(pval_interaction_r, na.rm = TRUE),
+    mean_r_squared_r = mean(r_squared_r, na.rm = TRUE),
+    frequency_r = n_hits_r / n_iter_r,
+    .groups = "drop"
+  ) %>%
+  filter(frequency_r >= 0.5)  # raise to 0.9 for stricter selection
+
+# View or save summary
+print(summary_stats_r)
+# write.table(summary_stats_r, "20250514_COLOSSUS_protein_metabolite_RELAPSE_interaction_1000_times_summary_RPPA_data.txt", row.names = FALSE, sep = "\t", quote = FALSE)
+
+#density plot
+library(ggplot2)
+library(dplyr)
+
+# Basic density plot of number of hits
+#pdf("20250512_COLOSSUS_PNI_metabolites_protein_1000_iterations_density_plot_RPPA_Data.pdf")
+ggplot(summary_stats, aes(x = n_hits)) +
+  geom_density(fill = "#67a9cf", alpha = 0.7) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Density of Significant Interaction Counts (n_hits)",
+    subtitle = "Across 1000 resampling iterations",
+    x = "Number of significant hits (n_hits)",
+    y = "Density"
+  )
+#dev.off()
+
+# histogram
+#pdf("20250512_COLOSSUS_PNI_metabolites_protein_1000_iterations_histogram_0.5_frequency_plot.pdf")
+ggplot(summary_stats_r, aes(x = n_hits_r)) +
+  geom_histogram(binwidth = 20, fill = "#67a9cf", color = "white") +
+  geom_vline(xintercept = 500, linetype = "dashed", color = "red") +
+  labs(
+    title = "Histogram of Significant Interaction Counts (n_hits)",
+    subtitle = "Dashed line = 50% threshold (500 hits)",
+    x = "Number of significant hits",
+    y = "Count"
+  ) +
+  theme_minimal(base_size = 14)
+#dev.off()
+
+
+# bubble plot
+
+library(ggplot2)
+library(dplyr)
+
+# Step 1: FDR adjustment
+summary_stats_r <- summary_stats_r %>%
+  mutate(pval_fdr_r = p.adjust(mean_pval_interaction_r, method = "fdr"))
+
+# Step 2: Select top 20 by raw p-value
+top_20_r <- summary_stats_r %>%
+  arrange(mean_pval_interaction_r) %>%
+  slice_head(n = 20)
+
+
+# Combine and remove duplicates
+plot_data_r <- bind_rows(top_20_r) %>%
+  distinct(protein_r, metabolite_r, .keep_all = TRUE) %>%
+  mutate(
+    interaction = paste(protein_r, metabolite_r, sep = " × "),
+    neg_log_fdr = -log10(pval_fdr_r)
+  )
+
+# Step 4: Plot
+#pdf("20250514_COLOSSUS_RELAPSE_metabolites_protein_1000_iterations_RPPA_Data_bubble_plot.pdf")
+ggplot(plot_data_r, aes(x = reorder(interaction, neg_log_fdr), y = neg_log_fdr)) +
+  geom_point(aes(size = neg_log_fdr, color = mean_pval_interaction_r), alpha = 0.9) +
+  scale_size(range = c(3, 10)) +
+  scale_color_gradient(low = "#2166AC", high = "#FEE090", trans = "log",
+                       name = "Raw p-value", labels = scales::scientific) +
+  coord_flip() +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 12),
+    plot.title = element_text(face = "bold", size = 16)
+  ) +
+  labs(
+    title = "Top 20 Interactions",
+    subtitle = "Color = raw p-value; Size = −log10(FDR-adjusted p-value)",
+    x = "Protein × Metabolite",
+    y = expression("-log"[10]*"(FDR-adjusted p-value)")
+  )
+#dev.off()
+
+# enrichment plot
+
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(readr)
+
+# Read the data from a tab-delimited .txt file
+# Pathway enrichment results table
+df <- read_tsv("20250512_COLOSSUS_protein_metabolite_PNI_interaction_1000_times_summary_RPPA_data_WikiPathways_2024_Mouse_table_positive.txt")
+
+# Optional: Clean column names if needed
+names(df) <- trimws(names(df))
+
+# Select top 15 by Combined Score
+df <- df %>% arrange(desc(`Combined Score`)) %>% head(15)
+
+# Create lollipop plot colored by -log10(Adjusted P-value)
+pdf("20250512_COLOSSUS_protein_metabolite_PNI_interaction_1000_times_summary_RPPA_data_WikiPathways_2024_Mouse_table_positive_lolipop_plot.pdf")
+ggplot(df, aes(x = reorder(Term, `Combined Score`), y = `Combined Score`, color = -log10(`Adjusted P-value`))) +
+  geom_segment(aes(xend = Term, y = 0, yend = `Combined Score`), color = "grey") +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "red") +
+  coord_flip() +
+  labs(title = "Top Pathways by Combined Score",
+       x = "Pathway",
+       y = "Combined Score",
+       color = "-log10(Adjusted P-value)") +
+  theme_minimal()
+dev.off()
+```
+
+```{r}
+#interaction_plot
+library(interactions)
+
+plot_interaction_with_p <- function(data, gene_col, pni_col, metabolite_col) {
+  # Rename columns internally for convenience
+  data$Gene <- data[[gene_col]]
+  data$PNI <- data[[pni_col]]
+  data$Metabolite <- data[[metabolite_col]]
+  
+  # Fit interaction model
+  lm_formula <- as.formula("Gene ~ status_relapse * Metabolite")
+  lm_result <- lm(lm_formula, data = data)
+  
+  # Extract interaction p-value
+  interaction_term <- grep("status_relapse:Metabolite", rownames(summary(lm_result)$coefficients), value = TRUE)
+  interaction_p <- summary(lm_result)$coefficients[interaction_term, "Pr(>|t|)"]
+  p_label <- paste0("Interaction p = ", signif(interaction_p, 3))
+  
+  # Create plot
+  library(ggplot2)
+  ggplot(data, aes(x = Metabolite, y = Gene, color = as.factor(PNI))) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE) +
+    labs(
+      title = paste("Interaction Between Relapse and", metabolite_col, "on", gene_col),
+      x = metabolite_col,
+      y = gene_col,
+      color = "status_relapse"
+    ) +
+    annotate("text", x = Inf, y = Inf, label = p_label, hjust = 1.1, vjust = 1.5, size = 5) +
+    theme_minimal()
+}
+
+plot_interaction_with_p(
+  data = combined_data,
+  gene_col = "O15042_U2SURP",
+  pni_col = "status_relapse",
+  metabolite_col = "Myristic acid_228.21_2.92"
+)
+```
+
